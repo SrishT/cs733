@@ -44,7 +44,7 @@ func testTime() {
 				if v.ctime+v.exptime>c {
 					_=os.Remove(k)
 					delete(m,k)
-				}
+				}		
 			}
 		}
 		time.Sleep(1 * time.Second)
@@ -62,21 +62,12 @@ func doParse(conn net.Conn,r *bufio.Reader,buf []byte) {
 	var err error
 	var c concurrency
 	var x,y byte
-	//fmt.Println("Back Again")
-	//fmt.Println(buf)
-	//fmt.Println(string(buf))
 	for i:=0; i < 1024; i++ {
-		//fmt.Println("Start Parsing")
 		x,err=r.ReadByte()
-		//fmt.Println(x)
-		//fmt.Println(string(x))
 		buf[i]=x
-		//fmt.Println(buf[i])
-		//fmt.Println(string(buf[i]))
 		if buf[0]==0 {
 			return
 		}
-		//fmt.Println(string(buf[:i]))
 		if i>0 && buf[i]=='\n' && buf[i-1]=='\r' {
 			message:=string(buf[:i])
 			s:=strings.Fields(message)
@@ -90,9 +81,7 @@ func doParse(conn net.Conn,r *bufio.Reader,buf []byte) {
 					fmt.Fprintf(conn,"ERR_CMD_ERR\r\n")
 					conn.Close()
 				}
-				//fmt.Println("Writing")
 				nbytes,err=strconv.Atoi(s[2])
-				//fmt.Println(nbytes)
 				check(conn,err)
 				msg := make([]byte, 1024)
 				for j = 0; j < nbytes; j++ {
@@ -102,21 +91,12 @@ func doParse(conn net.Conn,r *bufio.Reader,buf []byte) {
 						fmt.Println("Content is 0")
 						etime=0
 					}
-					//fmt.Println(j)
-					//fmt.Println(string(msg[:j]))
 				}
 				content=string(msg[:j])
-				//if content == "0" {
-				//	fmt.Println("Content is 0")
-				//	etime=0
-				//}
-				//fmt.Println(content)
 				x,err=r.ReadByte()
 				y,err=r.ReadByte()
 				if x=='\r' && y=='\n' {
 					c.write(conn,s[1],nbytes,etime,content)
-					//fmt.Println("Continue parsing")
-					//fmt.Println(string(buf))
 					doParse(conn,r,buf)
 				}else {
 					fmt.Fprintf(conn,"ERR_CMD_ERR\r\n")
@@ -154,17 +134,10 @@ func doParse(conn net.Conn,r *bufio.Reader,buf []byte) {
 					}
 				}
 				content=string(msg[:j])
-				//if content == "0" {
-				//	fmt.Println("Content is 0")
-				//	etime=0
-				//}
-				//fmt.Println(content)
 				x,err=r.ReadByte()
 				y,err=r.ReadByte()
 				if x=='\r' && y=='\n' {
 					c.cas(conn,s[1],vrsn,nbytes,etime,content)
-					//fmt.Println("Continue parsing")
-					//fmt.Println(string(buf))
 					doParse(conn,r,buf)
 				}else {
 					fmt.Fprintf(conn,"ERR_CMD_ERR\r\n")
@@ -193,16 +166,11 @@ func (c *concurrency) write(conn net.Conn,filename string,nbytes int,etime int64
 	if ok==true {
 		m[filename]=file{v.version+1,cur,etime,nbytes}
 	}else {
-		//fmt.Printf("m = %v\n", m)
 		m[filename]=file{1,cur,etime,nbytes}
 	}
-	//fmt.Println("Before write")
-	//fmt.Println(content)
 	err:= ioutil.WriteFile(filename,[]byte(content),0644)
-	//fmt.Println("After write")
     	check(conn,err)
 	fmt.Fprintf(conn,"OK %v\r\n",m[filename].version)
-	//fmt.Println("Write Complete")
 }
 func (c *concurrency) read(conn net.Conn,filename string) {
 	c.RLock()
@@ -215,6 +183,7 @@ func (c *concurrency) read(conn net.Conn,filename string) {
 		fmt.Fprintf(conn,"CONTENTS %v %v %v\r\n%v\r\n",temp.version,temp.numbytes,temp.exptime,string(contents[:]))
 	}else {
 		fmt.Fprintf(conn,"ERR_FILE_NOT_FOUND\r\n")
+		conn.Close()
 	}
 }
 func (c *concurrency) cas(conn net.Conn,filename string,vrsn int,nbytes int,etime int64,content string) {
@@ -232,10 +201,11 @@ func (c *concurrency) cas(conn net.Conn,filename string,vrsn int,nbytes int,etim
 			fmt.Fprintf(conn,"OK %v\r\n",m[filename].version)
 		}else {
 			fmt.Fprintf(conn,"ERR_VERSION\r\n")
+			return
 		}
 	}else {
 		fmt.Fprintf(conn,"ERR_FILE_NOT_FOUND\r\n")
-		return
+		conn.Close()
 	}		
 }
 func (c *concurrency) del(conn net.Conn,filename string) {
@@ -249,7 +219,7 @@ func (c *concurrency) del(conn net.Conn,filename string) {
 		fmt.Fprintf(conn,"OK\r\n")
 	}else {
 		fmt.Fprintf(conn,"ERR_FILE_NOT_FOUND\r\n")
-		return
+		conn.Close()
 	}
 }
 func check(conn net.Conn,err error) {
