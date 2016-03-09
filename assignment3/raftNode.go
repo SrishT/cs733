@@ -16,12 +16,29 @@ type RaftNode struct { // implements Node interface
 	CommitChannel() <- chan CommitInfo
 }
 
-func (rn *RaftNode) Append(data) {
-	rn.eventCh <- Append{data: data}
+type struct CommitInfo {
+	Data[] byte
+	Index int64 // or int .. whatever you have in your code
+	Err error // Err can be errred
 }
 
 func New(config Config) Node {
 	
+}
+
+func (rn *RaftNode) Append(data) {
+	rn.eventCh <- Append{data: data}
+}
+
+func (rn *RaftNode) Id() {
+	return id
+}
+
+func (rn *RaftNode) LeaderId() {
+	return leaderId
+}
+
+func (rn *RaftNode) Shutdown() {
 }
 
 func (rn *RaftNode) processActions (actions []interface{}) {
@@ -41,8 +58,10 @@ func (rn *RaftNode) processActions (actions []interface{}) {
 							ev := sm.ProcessEvent{AppendEntriesReqEv{c.id,c.index,c.term,c.success}}
 					}
 					rn.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: ev}
-				case Commit: CommitChannel <- actions[i]
+				case Commit: cmd := actions[i].(Commit)
+					CommitChannel <- {cmd.term, cmd.index, cmd.err}
 				case LogStore: cmd := actions[i].(LogStore)
+					log.Append()
 				case SaveState:
 			}
 		}
