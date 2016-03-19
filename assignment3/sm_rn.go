@@ -1,10 +1,13 @@
 package raft
 
 import (
-	//"fmt"
+	"fmt"
 	"time"
+	"strconv"
+	"io/ioutil"
 	//"reflect"
 	"math/rand"
+	"github.com/cs733-iitb/log"
 	"github.com/cs733-iitb/cluster"
 	"github.com/cs733-iitb/cluster/mock"
 	//"github.com/SrishT/cs733/assignment3"
@@ -15,22 +18,20 @@ const val = 5
 var leaderId int
 
 type CommitInfo struct {
-	Data string
+	Data  []byte
 	Index int // or int .. whatever you have in your code
-	Err error // Err can be errred
+	Err   error // Err can be errred
 }
 
 type ConfigRN struct {
-	cluster []*NetConfig // Information about all servers, including this
-	Id int // this node's id. One of the cluster's entries should match
-	LogDir string // Log file directory for this node
-	StateDir string
-	ElectionTimeout int
+	cluster 	 []*NetConfig // Information about all servers, including this
+	Id 		 int // this node's id. One of the cluster's entries should match
+	ElectionTimeout  int
 	HeartbeatTimeout int
 }
 
 type NetConfig struct {
-	Id int
+	Id   int
 	Host string
 	Port int
 }
@@ -39,9 +40,10 @@ type RaftNode struct { // implements Node interface
 	id int
 	lid int
 	sm *SM
-	server *mock.MockServer
-	//eventCh chan Event
+	LogDir string
+	StateDir string
 	timeoutCh *time.Timer
+	server *mock.MockServer
 	commitChannel chan *CommitInfo
 }
 
@@ -49,8 +51,7 @@ func NewRN(Id int, config ConfigRN) (raftNode *RaftNode) {
 	rand.Seed(time.Now().UTC().UnixNano()*int64(Id))
 	cc := make(chan *CommitInfo)
 	t := time.NewTimer(time.Duration(config.ElectionTimeout)*time.Millisecond)
-	rn := &RaftNode{id:Id, lid:-1, timeoutCh:t, commitChannel:cc}
-	//rn.stmc := SM{id:1,lid:-1,peers:peer,status:1,curTerm:3,votedFor:0,majority:m,commitIndex:2,log:lg,logTerm:2, logIndex:4, nextIndex:ni}
+	rn := &RaftNode{id:Id, lid:-1, timeoutCh:t, commitChannel:cc, StateDir:"StateStore"+strconv.Itoa(Id), LogDir:"LogFile"+strconv.Itoa(Id)}
 	return rn
 }
 
@@ -68,7 +69,7 @@ func LeaderId(rn []*RaftNode) int {
 	return lid
 }
 
-func (rn *RaftNode) Append(data string) {
+func (rn *RaftNode) Append(data []byte) {
 	//fmt.Println("********************* Client Append ************************ ",data)
 	//fmt.Println("********************* Client Append lid ******************** ",rn.lid," ",rn.sm.lid," ",rn.sm.id)
 	//fmt.Println("********************* Client Append sm status ************** ",rn.sm.status)
@@ -112,13 +113,23 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 					//fmt.Println("Commit entry at: ",rn.id," by ",rn.id," term ",rn.sm.curTerm)
 					rn.CommitChannel() <- &CommitInfo{Data:cmd.data, Index:cmd.index, Err:cmd.err}
 				case LogStore: cmd := actions[i].(LogStore)
-					//fmt.Println(reflect.TypeOf(cmd).Name())
-					rn.sm.log[rn.sm.logIndex+1].data = []byte(cmd.data)
+					fmt.Println("Log Store Event, filename: ",rn.LogDir)
+					rn.sm.log[rn.sm.logIndex+1].data = cmd.data
 					rn.sm.log[rn.sm.logIndex+1].term = rn.sm.curTerm
+					lg, err := log.Open(rn.LogDir)
+					if err!=nil {
+						fmt.Println("Error opening Log File")
+					}else {
+						lg.Append(cmd.data)
+					}
 					//fmt.Println("Log Store at: ",rn.id," Data: ",cmd.data," by ",rn.id," term ",rn.sm.curTerm)
-				case SaveState: _ = actions[i].(SaveState)
-					//fmt.Println(reflect.TypeOf(cmd).Name())
-					//fmt.Println("Save State at: ",rn.id," term, voted for: ",cmd.curTerm,", ",cmd.votedFor," by ",rn.id," term ",rn.sm.curTerm)
+				case SaveState: cmd := actions[i].(SaveState)
+					temp := strconv.Itoa(cmd.curTerm)+", "+strconv.Itoa(cmd.votedFor)
+					fmt.Println("Save State Event, filename: ",rn.StateDir," temp: ",temp)
+					err := ioutil.WriteFile(rn.StateDir, []byte(temp), 0644)
+					if err!=nil {
+						fmt.Println("Error writing to file")
+					}
 			}
 		}
 	}
@@ -143,7 +154,6 @@ func makeRafts() ([]*RaftNode) {
 		ElectionTimeout: 1200,
 		HeartbeatTimeout: 500,
 	}
-
 
 	// Create a raft node, and give the corresponding "Server" object from the
 	// cluster to help it communicate with the others.

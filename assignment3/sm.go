@@ -14,7 +14,7 @@ type Send struct {
 type LogStore struct {
 	index int
 	term  int
-	data  string
+	data  []byte
 }
 
 type SaveState struct {
@@ -48,7 +48,7 @@ type Commit struct {
 	id    int
 	index int
 	term  int
-	data  string
+	data  []byte
 	err   error
 }
 
@@ -73,7 +73,7 @@ type Alarm struct {
 }
 
 type AppendEv struct {
-	data string
+	data []byte
 	flag int
 }
 
@@ -83,7 +83,7 @@ type AppendEntriesReqEv struct {
 	prevLogIndex int
 	prevLogTerm  int
 	fl	     int
-	data	     string
+	data	     []byte
 	leaderCommit int
 }
 
@@ -91,7 +91,7 @@ type AppendEntriesRespEv struct {
 	id      int
 	index   int
 	term    int
-	data	string
+	data	[]byte
 	success bool
 }
 
@@ -101,14 +101,11 @@ func (s *SM) ProcessEvent(ev interface{}) []interface{} {
 	switch ev.(type) {
 	case AppendEv:
 		cmd := ev.(AppendEv)
-		//fmt.Println("***************** In Append Process Event **************** ",cmd.data," ",cmd.flag)
 		actions := s.appnd(cmd.data, cmd.flag)
 		return actions
 	case AppendEntriesReqEv:
-		//fmt.Println("NP 1")
 		cmd := ev.(AppendEntriesReqEv)
 		actions := s.appendEntriesReq(cmd.term, cmd.lid, cmd.prevLogIndex, cmd.prevLogTerm, cmd.fl, cmd.data, cmd.leaderCommit, s.log)
-		//fmt.Println("NP 3")
 		return actions
 	case AppendEntriesRespEv:
 		cmd := ev.(AppendEntriesRespEv)
@@ -133,7 +130,7 @@ func (s *SM) ProcessEvent(ev interface{}) []interface{} {
 	return actions
 }
 
-func (s *SM) appnd(dat string,flag int) []interface{} {
+func (s *SM) appnd(dat []byte,flag int) []interface{} {
 	actions := make([]interface{}, 10)
 	j := 0
 	//fmt.Println("**********||||********** In SM Client Append **********||||********** ID : ",s.id," LID : ",s.lid)
@@ -150,7 +147,7 @@ func (s *SM) appnd(dat string,flag int) []interface{} {
 		//fmt.Println("----------In SM Leader Client Append----------------")
 		actions[j] = LogStore{index: s.logIndex + 1, term: s.curTerm, data: dat} /*----------------correct data------------*/
 		j++
-		s.log[s.logIndex+1].data = []byte(dat)
+		s.log[s.logIndex+1].data = dat
 		s.log[s.logIndex+1].term = s.curTerm
 		//fmt.Println("-----------In SM Leader Client Append Sent Log Store------------")
 		s.majority[s.id-1] = 1
@@ -169,7 +166,7 @@ func (s *SM) appnd(dat string,flag int) []interface{} {
 	return actions
 }
 
-func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int, prevLogTrm int, flag int, dat string, lC int, log []LogEntries) []interface{} {
+func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int, prevLogTrm int, flag int, dat []byte, lC int, log []LogEntries) []interface{} {
 	actions := make([]interface{}, 10)
 	//fmt.Println("--------------- In AppendEntriesReq -----------------")
 	switch s.status {
@@ -246,7 +243,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int, prevLogTrm int, 
 	return actions
 }
 
-func (s *SM) appendEntriesResp(id int, index int, term int, dat string, success bool) []interface{} {
+func (s *SM) appendEntriesResp(id int, index int, term int, dat []byte, success bool) []interface{} {
 	actions := make([]interface{}, 10)
 	switch s.status {
 	case 1: //follower
@@ -286,7 +283,7 @@ func (s *SM) appendEntriesResp(id int, index int, term int, dat string, success 
 				//handle successive entries
 				if index < s.logIndex {
 					s.nextIndex[id-1] = s.nextIndex[id-1] + 1
-					actions[0] = Send{id, AppendEntriesReqEv{term: s.log[s.nextIndex[id-1]].term, lid: s.id, prevLogIndex: s.nextIndex[id-1] - 1, prevLogTerm: s.log[s.nextIndex[id-1]-1].term, fl:1, data:"", leaderCommit: s.commitIndex}} /*-----------change data----------*/
+					actions[0] = Send{id, AppendEntriesReqEv{term: s.log[s.nextIndex[id-1]].term, lid: s.id, prevLogIndex: s.nextIndex[id-1] - 1, prevLogTerm: s.log[s.nextIndex[id-1]-1].term, fl:1, data:[]byte(""), leaderCommit: s.commitIndex}} /*-----------change data----------*/
 				}
 				for i := 0; i < len(s.peers); i++ {
 					if s.majority[i] == 1 {
@@ -361,7 +358,7 @@ func (s *SM) voteReq(id int, term int, logIndex int, logTerm int) []interface{} 
 			j := 1
 			for i := 0; i < len(s.peers); i++ {
 				if s.peers[i] != 0 {
-					actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:"", leaderCommit: s.commitIndex}}
+					actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:[]byte(""), leaderCommit: s.commitIndex}}
 					j++
 				}
 			}
@@ -417,7 +414,7 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 				}
 				for i := 0; i < len(s.peers); i++ {
 					if s.peers[i] != 0 {
-						actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:"", leaderCommit: s.commitIndex}}
+						actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:[]byte(""), leaderCommit: s.commitIndex}}
 						j++
 					}
 				}
@@ -486,7 +483,7 @@ func (s *SM) timeout() []interface{} {
 		actions[0] = Alarm{timeout:s.heartbeatTimeout}
 		for i := 0; i < len(s.peers); i++ {
 			if s.peers[i] != 0 {
-				actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:"", leaderCommit: s.commitIndex}}
+				actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:[]byte(""), leaderCommit: s.commitIndex}}
 				j++
 			}
 		}
