@@ -113,7 +113,7 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 					//fmt.Println("Commit entry at: ",rn.id," by ",rn.id," term ",rn.sm.curTerm)
 					rn.CommitChannel() <- &CommitInfo{Data:cmd.data, Index:cmd.index, Err:cmd.err}
 				case LogStore: cmd := actions[i].(LogStore)
-					fmt.Println("Log Store Event, filename: ",rn.LogDir)
+					//fmt.Println("Log Store Event, filename: ",rn.LogDir)
 					rn.sm.log[rn.sm.logIndex+1].data = cmd.data
 					rn.sm.log[rn.sm.logIndex+1].term = rn.sm.curTerm
 					lg, err := log.Open(rn.LogDir)
@@ -125,7 +125,7 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 					//fmt.Println("Log Store at: ",rn.id," Data: ",cmd.data," by ",rn.id," term ",rn.sm.curTerm)
 				case SaveState: cmd := actions[i].(SaveState)
 					temp := strconv.Itoa(cmd.curTerm)+", "+strconv.Itoa(cmd.votedFor)
-					fmt.Println("Save State Event, filename: ",rn.StateDir," temp: ",temp)
+					//fmt.Println("Save State Event, filename: ",rn.StateDir," temp: ",temp)
 					err := ioutil.WriteFile(rn.StateDir, []byte(temp), 0644)
 					if err!=nil {
 						fmt.Println("Error writing to file")
