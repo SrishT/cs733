@@ -1,7 +1,7 @@
 package raft
 
 import (
-	"fmt"
+	//"fmt"
 	"time"
 	"testing"
 	//"github.com/cs733-iitb/cluster"

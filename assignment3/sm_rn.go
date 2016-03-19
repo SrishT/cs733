@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"time"
+	//"errors"
 	"strconv"
 	"io/ioutil"
 	//"reflect"
@@ -68,11 +69,26 @@ func LeaderId(rn []*RaftNode) int {
 	}
 	return lid
 }
+/*
+func (rn *RaftNode) Get(index int) (error, []byte) {
+	var err error
+	lg, err := log.Open(rn.LogDir)
+	if err==nil {
+		if index < rn.sm.logIndex && index >= 0 {
+			val, e := lg.Get(int64(index))
+			return e, []byte(val)
+		}else{
+			err = errors.New("Not a valid index")
+		}
+	}
+	return err,[]byte("")
+}
+*/
+func (rn *RaftNode) CommittedIndex() int {
+	return rn.sm.commitIndex
+}
 
 func (rn *RaftNode) Append(data []byte) {
-	//fmt.Println("********************* Client Append ************************ ",data)
-	//fmt.Println("********************* Client Append lid ******************** ",rn.lid," ",rn.sm.lid," ",rn.sm.id)
-	//fmt.Println("********************* Client Append sm status ************** ",rn.sm.status)
 	actions := rn.sm.ProcessEvent(AppendEv{data,1})
 	rn.doActions(actions)
 }

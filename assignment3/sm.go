@@ -96,7 +96,6 @@ type AppendEntriesRespEv struct {
 }
 
 func (s *SM) ProcessEvent(ev interface{}) []interface{} {
-	//fmt.Println("Processing event ",reflect.TypeOf(ev))
 	actions := make([]interface{}, 10)
 	switch ev.(type) {
 	case AppendEv:
@@ -112,12 +111,10 @@ func (s *SM) ProcessEvent(ev interface{}) []interface{} {
 		actions := s.appendEntriesResp(cmd.id, cmd.index, cmd.term, cmd.data, cmd.success)
 		return actions
 	case Timeout:
-		//fmt.Println("Processing Timeout Event")
 		actions := s.timeout()
 		return actions
 	case VoteReqEv:
 		cmd := ev.(VoteReqEv)
-		//fmt.Println("log data",s.id," ",s.logIndex," ",s.logTerm)
 		actions := s.voteReq(cmd.candidateId, cmd.term, cmd.logIndex, cmd.logTerm)
 		return actions
 	case VoteRespEv:
@@ -133,55 +130,42 @@ func (s *SM) ProcessEvent(ev interface{}) []interface{} {
 func (s *SM) appnd(dat []byte,flag int) []interface{} {
 	actions := make([]interface{}, 10)
 	j := 0
-	//fmt.Println("**********||||********** In SM Client Append **********||||********** ID : ",s.id," LID : ",s.lid)
 	switch s.status { 
 	case 1: //follower
-		//fmt.Println("---------In SM Follower Client Append--------------")
 		actions[0] = Send{s.lid, AppendEv{dat,flag}}
 	case 2: //candidate
-		//fmt.Println("----------In SM Candidate Client Append------------")
 		var err error
 		err = errors.New("No Leader")
 		actions[0] = Commit{s.id, -1, 0, dat, err}
 	case 3: //leader
-		//fmt.Println("----------In SM Leader Client Append----------------")
-		actions[j] = LogStore{index: s.logIndex + 1, term: s.curTerm, data: dat} /*----------------correct data------------*/
+		actions[j] = LogStore{index: s.logIndex + 1, term: s.curTerm, data: dat}
 		j++
 		s.log[s.logIndex+1].data = dat
 		s.log[s.logIndex+1].term = s.curTerm
-		//fmt.Println("-----------In SM Leader Client Append Sent Log Store------------")
 		s.majority[s.id-1] = 1
 		for i := 0; i < len(s.peers); i++ {
 			if s.peers[i] != 0 {
-				//fmt.Println("Sending Append Req Event to ",s.peers[i])
 				actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: flag, data:dat, leaderCommit: s.commitIndex}}
 				j++
 			}
 		}
-		//fmt.Println(reflect.TypeOf(actions[0]).Name()," ",reflect.TypeOf(actions[1]).Name()," ",reflect.TypeOf(actions[2]).Name())
 		s.logIndex++
 		s.logTerm = s.curTerm
 	}
-	//fmt.Println("---------Returning actions from logStore--------------")
 	return actions
 }
 
 func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int, prevLogTrm int, flag int, dat []byte, lC int, log []LogEntries) []interface{} {
 	actions := make([]interface{}, 10)
-	//fmt.Println("--------------- In AppendEntriesReq -----------------")
 	switch s.status {
 	case 1: //follower
-		//fmt.Println("SP 3")
 		if trm < s.curTerm {
 			actions[0] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm, data: dat, success: false}}
 		} else {
 			s.lid = lid
 			actions[0] = Alarm{timeout:s.electionTimeout}
-			//fmt.Println("in append 1, data =",cmd)
 			if s.logTerm == prevLogTrm && s.logIndex == prevLogInd {
-				//fmt.Println("in append 2, data =",cmd)
 				if flag == 1 {
-					//fmt.Println("here",cmd)
 					actions[1] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex + 1,
 						term: s.curTerm, data: dat, success: true}}
 					actions[2] = LogStore{index: prevLogInd + 1, term: trm, data:dat}
@@ -190,9 +174,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int, prevLogTrm int, 
 					log[s.logIndex].term = trm
 				}
 				//commit
-				//fmt.Println("to commit 1",s.commitIndex,lC)
 				if s.commitIndex < lC {
-					//fmt.Println("to commit 2",s.commitIndex,lC)
 					if s.logIndex < lC {
 						s.commitIndex = s.logIndex
 					} else {
@@ -210,7 +192,6 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int, prevLogTrm int, 
 			}
 		}
 	case 2: //candidate
-		//fmt.Println("Reached here")
 		if s.curTerm < trm {
 			actions[0] = Alarm{timeout:s.electionTimeout}
 			s.status = 1
@@ -283,20 +264,19 @@ func (s *SM) appendEntriesResp(id int, index int, term int, dat []byte, success 
 				//handle successive entries
 				if index < s.logIndex {
 					s.nextIndex[id-1] = s.nextIndex[id-1] + 1
-					actions[0] = Send{id, AppendEntriesReqEv{term: s.log[s.nextIndex[id-1]].term, lid: s.id, prevLogIndex: s.nextIndex[id-1] - 1, prevLogTerm: s.log[s.nextIndex[id-1]-1].term, fl:1, data:[]byte(""), leaderCommit: s.commitIndex}} /*-----------change data----------*/
+					actions[0] = Send{id, AppendEntriesReqEv{term: s.log[s.nextIndex[id-1]].term, lid: s.id, prevLogIndex: s.nextIndex[id-1] - 1, prevLogTerm: s.log[s.nextIndex[id-1]-1].term, fl:1, data:[]byte(""), leaderCommit: s.commitIndex}}
 				}
 				for i := 0; i < len(s.peers); i++ {
 					if s.majority[i] == 1 {
 						vr++
 					}
 				}
-				//fmt.Println("Votes Recv = ",vr)
 				if vr >= (len(s.peers)/2)+1 {
 					actions[0] = Commit{id: id, index: index, term: term, data: dat, err:nil}
 				}
 			} else if success == false && id!=0 {
 				//s.nextIndex[id-1] = s.nextIndex[id-1] - 1
-				//actions[0] = Send{id, AppendEntriesReqEv{term: s.log[s.nextIndex[id-1]].term, lid: s.id, prevLogIndex: s.nextIndex[id-1] - 1, prevLogTerm: s.log[s.nextIndex[id-1]-1].term, fl:1, data:s.log[s.nextIndex[id-1]-1].data, leaderCommit: s.commitIndex}} /*-----------change data plus index getting out of range----------*/
+				//actions[0] = Send{id, AppendEntriesReqEv{term: s.log[s.nextIndex[id-1]].term, lid: s.id, prevLogIndex: s.nextIndex[id-1] - 1, prevLogTerm: s.log[s.nextIndex[id-1]-1].term, fl:1, data:s.log[s.nextIndex[id-1]-1].data, leaderCommit: s.commitIndex}}
 			}
 		}
 	}
@@ -399,14 +379,8 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 				}
 			}
 			if vr >= (len(s.peers)/2)+1 {
-				//fmt.Println("***************************************")
-				//fmt.Println("***************************************")
-				//fmt.Println("***********Leader Elected**************")
-				//fmt.Println("***************************************")
-				//fmt.Println("***************************************")
 				s.status = 3
 				s.lid = s.id
-				//fmt.Println("---------- Leader Id ",s.lid,"--------")
 				actions[0] = Alarm{timeout:s.heartbeatTimeout}
 				for i := 0; i < len(s.nextIndex); i++ {
 					s.majority[i] = 0
@@ -437,7 +411,6 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 }
 
 func (s *SM) timeout() []interface{} {
-	//fmt.Println("In timeout")
 	actions := make([]interface{}, 10)
 	j := 1
 	switch s.status {
@@ -448,16 +421,10 @@ func (s *SM) timeout() []interface{} {
 			s.majority[i] = 0
 		}
 		s.votedFor = s.id
-		//fmt.Println("Voted for self by ",s.id)
 		actions[0] = Alarm{timeout:s.electionTimeout}
-		//fmt.Println("SM1 ",s.id)
 		actions[j] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor}
-		//fmt.Println("SM2 ",s.id)
 		j++
-		//fmt.Println("SM3 ",s.id)
-		//fmt.Println("s.id", s.id)
 		s.majority[s.id-1] = 1
-		//fmt.Println("SM4 ",s.id)
 		for i := 0; i < len(s.peers); i++ {
 			if s.peers[i] != 0 {
 				actions[j] = Send{s.peers[i], VoteReqEv{candidateId: s.id, term: s.curTerm, logIndex: s.logIndex, logTerm: s.logTerm}}
@@ -488,6 +455,5 @@ func (s *SM) timeout() []interface{} {
 			}
 		}
 	}
-	//fmt.Println("In SM, actions = ",actions)
 	return actions
 }
