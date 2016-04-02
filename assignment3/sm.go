@@ -225,6 +225,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 					}
 					fmt.Println("modified commit indices ",s.commitIndex," : ",lC)
 					actions[3] = Commit{id: s.id, index: s.commitIndex, term: trm, data: dat, err:nil}
+					actions[4] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 				}
 			} else if s.logIndex > prevLogInd && flag == 1 {
 				t,_:= s.lg.Get(prevLogInd)
@@ -247,6 +248,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 						s.commitIndex = lC
 					}
 					actions[3] = Commit{id: s.id, index: s.commitIndex, term: trm, data: dat, err:nil}
+					actions[4] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 				}
 					
 				}
@@ -344,6 +346,7 @@ func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, succes
 					s.commitIndex++
 					fmt.Println("Updating Leader Commit")
 					actions[0] = Commit{id: id, index: index, term: term, data: dat, err: nil}
+					actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 				}
 			} else if success == false && index>0 {
 				s.nextIndex[id-1] = s.nextIndex[id-1]-1
