@@ -56,6 +56,7 @@ type RaftNode struct { // implements Node interface
 }
 
 func NewRN(Id int, config ConfigRN) (raftNode *RaftNode) {
+	// sriram - Why randomize? Esp. when you are debugging
 	//rand.Seed(time.Now().UTC().UnixNano()*int64(Id))
 	cc := make(chan *CommitInfo)
 	t := time.NewTimer(time.Duration(config.ElectionTimeout)*time.Millisecond)
@@ -222,12 +223,12 @@ func makeRafts() ([]*RaftNode) {
 				ni[j]=li+1
 			}
 		}
-		//** DEBUG **/
+		// sriram ** DEBUG REMOVE AFTER DEBUGGING **/
 		electionTimeOut := 500
 		if srv.Pid() != 1 {
-			electionTimeOut = 10000
+			electionTimeOut = 10000 // ensuring leader 1 is always 1
 		}
-		//** DEBUG **/
+
 		raftNode.sm = &SM{id:srv.Pid(), lid:-1,peers:peer,status:1, curTerm:ct, votedFor:vf, majority:m, commitIndex:ci, lg:log, logIndex:li, logTerm:lt, nextIndex:ni, electionTimeout: electionTimeOut, heartbeatTimeout:raftConfig.HeartbeatTimeout}
 		//raftNode.sm.log.RegisterSampleEntry(LogEntries{})	
 		nodes[i-1] = raftNode

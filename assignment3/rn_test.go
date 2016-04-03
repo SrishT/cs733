@@ -11,7 +11,12 @@ import (
 	//"github.com/SrishT/cs733/assignment3/r"
 )
 
+// sriram Not really a test, but added to clean up all directories before the test
 func Test_start(t *testing.T) {
+	cleanup()
+}
+
+func cleanup() {
 	os.RemoveAll("LogDir1")
 	os.RemoveAll("LogDir2")
 	os.RemoveAll("LogDir3")
@@ -22,6 +27,8 @@ func Test_start(t *testing.T) {
 
 func Test_basic(t *testing.T) {
 	nodes:=makeRafts()
+	// sriram -- why is the following not in a loop? Hardcoding array indices is almost always a sign 
+	// of a potential bug or repetition
 	go func() {
 		nodes[0].runNode()
 	}()
@@ -32,15 +39,17 @@ func Test_basic(t *testing.T) {
 		nodes[2].runNode()
 	}()
 	time.Sleep(time.Second*2)
+
 	//fmt.Println("*******************************************")
 	//fmt.Println("*******************************************")
 	//fmt.Println("*************** Leader is *****************",nodes[0].sm.status,nodes[1].sm.status,nodes[2].sm.status)
 	//fmt.Println("*******************************************")
 	//fmt.Println("*******************************************")
 	l:=LeaderId(nodes)
-	println("**** leader Id = ", l)
+
+	// sriram -- instead of nodes[l-1], why not have ldr := nodes[l-1], and use ldr.Append(). Ugly to
+	// see nodes[l-1] everywhere.
 	n1:=nodes[l-1].sm.lg.GetLastIndex()
-	
 	nodes[l-1].Append("hello")
 	//time.Sleep(time.Second*10)
 	//fmt.Println("************** Monitoring Commit Channel ******************")
@@ -77,4 +86,13 @@ func Test_basic(t *testing.T) {
 	//}else {
 	//	t.Fatal("Expected commit info")
 	//}
+
+	// sriram - Ensure that all the Appends() are accounted for in the correct order, automatically.
+	// You should not have any printlns in the test. After all, why would you look at output if you can just
+	// test it test it automatically.
+}
+
+// sriram Not really a test, but added to clean up all directories after the test
+func Test_end(t *testing.T) {
+	cleanup()
 }
