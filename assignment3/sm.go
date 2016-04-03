@@ -7,6 +7,10 @@ import (
 	"github.com/cs733-iitb/log"
 )
 
+const LEADER = 3
+const CANDIDATE = 2
+const FOLLOWER = 1
+
 type Send struct {
 	id    int
 	event interface{}
@@ -26,7 +30,7 @@ type SaveState struct {
 
 //sriram - LogEntries is plural, whereas the struct represents a single log entry
 //         Names really matter. Misuse of them can give rise to a lot of errors.
-type LogEntries struct {
+type LogEntry struct {
 	Term int
 	Data []byte
 }
@@ -40,11 +44,6 @@ type SM struct {
 	votedFor    int
 	majority    []int
 	commitIndex int64
-	// sriram-Why does the state machine have a single logEntry? What can it possibly
-	//  do with it. Remove it and fix the rest of the code. This was also your bug.
-	// Also, notice that the type of logEntry is "logEntries" .. a singular
-	//  object is given a plural type ... pay attention this kind of stuff
-	logEntry    LogEntries
 	lg	    *log.Log
 	logTerm     int
 	logIndex    int64
@@ -116,7 +115,7 @@ func (s *SM) ProcessEvent(ev interface{}) []interface{} {
 	case AppendEntriesReqEv:
 		//fmt.Println("NP 1")
 		cmd := ev.(AppendEntriesReqEv)
-		actions := s.appendEntriesReq(cmd.term, cmd.lid, cmd.prevLogIndex, cmd.prevLogTerm, cmd.fl, cmd.data, cmd.leaderCommit, s.logEntry)
+		actions := s.appendEntriesReq(cmd.term, cmd.lid, cmd.prevLogIndex, cmd.prevLogTerm, cmd.fl, cmd.data, cmd.leaderCommit)
 		//fmt.Println("NP 3")
 		return actions
 	case AppendEntriesRespEv:
@@ -145,26 +144,24 @@ func (s *SM) ProcessEvent(ev interface{}) []interface{} {
 
 func (s *SM) appnd(dat []byte,flag int) []interface{} {
 	actions := make([]interface{}, 10)
+	le := LogEntry{}
 	j := 0
-	//fmt.Println("**********||||********** In SM Client Append **********||||********** ID : ",s.id," LID : ",s.lid)
 	switch s.status { 
-              // sriram - Don't use 1,2,3. Use const declarations for LEADER, FOLLOWER etc
-
-	case 1: //follower
+	case FOLLOWER:
 		//fmt.Println("---------In SM Follower Client Append--------------")
 		actions[0] = Send{s.lid, AppendEv{dat,flag}}
-	case 2: //candidate
+	case CANDIDATE:
 		//fmt.Println("----------In SM Candidate Client Append------------")
 		var err error
 		err = errors.New("No Leader")
 		actions[0] = Commit{s.id, -1, 0, dat, err}
-	case 3: //leader
+	case LEADER:
 		//fmt.Println("----------In SM Leader Client Append----------------")
 		actions[j] = LogStore{index: s.logIndex + 1, term: s.curTerm, data: dat} /*----------------correct data------------*/
 		j++
-		s.logEntry.Data = dat
-		s.logEntry.Term = s.curTerm
-		s.lg.Append(s.logEntry)
+		le.Data = dat
+		le.Term = s.curTerm
+		s.lg.Append(le)
 		//fmt.Println("Storing data in log for node ",s.id," data: ",string(dat),"!")
 		//d, err:=s.lg.Get(s.lg.GetLastIndex())
 		//if err != nil {
@@ -186,17 +183,17 @@ func (s *SM) appnd(dat []byte,flag int) []interface{} {
 		s.logIndex++
 		s.logTerm = s.curTerm
 		//fmt.Println("Log indices after storing data : ",s.lg.GetLastIndex()," : ",s.logIndex)
-		//fmt.Println("Data : ",string(d.(LogEntries).Data)," Term : ",d.(LogEntries).Term," at node ",s.id)
+		//fmt.Println("Data : ",string(d.(LogEntry).Data)," Term : ",d.(LogEntry).Term," at node ",s.id)
 	}
 	//fmt.Println("---------Returning actions from logStore--------------")
 	return actions
 }
 
-func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int, flag int, dat []byte, lC int64, logEntry LogEntries) []interface{} {
+func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int, flag int, dat []byte, lC int64) []interface{} {
 	actions := make([]interface{}, 10)
-	//fmt.Println("--------------- In AppendEntriesReq -----------------")
+	le := LogEntry{}
 	switch s.status {
-	case 1: //follower
+	case FOLLOWER:
 		//fmt.Println("SP 3")
 		if trm < s.curTerm {
 			actions[0] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm, data: dat, success: false}}
@@ -217,14 +214,14 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 					s.logIndex++
 					//fmt.Println("Node : ",s.id," LogIndex after : ",s.logIndex)
 					s.logTerm = trm
-					logEntry.Term = trm
-					logEntry.Data = dat
+					le.Term = trm
+					le.Data = dat
 
 					// sriram **** DEBUG ****
 					if s.id == 2 {
-						fmt.Println("Before storing, term = ",logEntry.Term," data = ",string(logEntry.Data))
+						fmt.Println("Before storing, term = ",le.Term," data = ",string(le.Data))
 					}
-					e:=s.lg.Append(logEntry)
+					e:=s.lg.Append(le)
 					if e!=nil {
 						panic(e)
 					}
@@ -237,7 +234,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 							panic(err)
 						}
 						fmt.Println("Log indices after storing data : ",s.lg.GetLastIndex()," : ",s.logIndex)
-						fmt.Println("Data : ",string(d.(LogEntries).Data)," Term : ",d.(LogEntries).Term," at node ",s.id)
+						fmt.Println("Data : ",string(d.(LogEntry).Data)," Term : ",d.(LogEntry).Term," at node ",s.id)
 					}
 				}
 				//commit
@@ -255,7 +252,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 				}
 			} else if s.logIndex > prevLogInd && flag == 1 {
 				t,_:= s.lg.Get(prevLogInd)
-				if t.(LogEntries).Term == prevLogTrm {
+				if t.(LogEntry).Term == prevLogTrm {
 					s.lg.TruncateToEnd(prevLogInd) //-----------------------------------handle
 					s.curTerm = trm /////-------------------------------check!! (just added)
 					actions[1] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex + 1,
@@ -263,26 +260,24 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 					actions[2] = LogStore{index: prevLogInd + 1, term: trm, data:dat}
 					s.logIndex++
 					s.logTerm = trm
-					logEntry.Term = trm
-					logEntry.Data = dat
-					s.lg.Append(s.logEntry)
+					le.Term = trm
+					le.Data = dat
+					s.lg.Append(le)
 					if s.commitIndex < lC {
-					//fmt.Println("to commit 2",s.commitIndex,lC)
-					if s.logIndex < lC {
-						s.commitIndex = s.logIndex
-					} else {
-						s.commitIndex = lC
-					}
-					actions[3] = Commit{id: s.id, index: s.commitIndex, term: trm, data: dat, err:nil}
-					actions[4] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
-				}
-					
+						if s.logIndex < lC {
+							s.commitIndex = s.logIndex
+						} else {
+							s.commitIndex = lC
+						}
+						actions[3] = Commit{id: s.id, index: s.commitIndex, term: trm, data: dat, err:nil}
+						actions[4] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+					}	
 				}
 			} else {
 				actions[1] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm,  data: dat, success: false}}
 			}
 		}
-	case 2: //candidate
+	case CANDIDATE:
 		//fmt.Println("Reached here")
 		if s.curTerm < trm {
 			actions[0] = Alarm{timeout:s.electionTimeout}
@@ -297,7 +292,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 		} else {
 			actions[0] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm, data: dat, success: false}}
 		} 
-	case 3: //leader
+	case LEADER:
 		if s.curTerm < trm {
 			actions[0] = Alarm{timeout:s.electionTimeout}
 			s.status = 1
@@ -319,7 +314,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, success bool) []interface{} {
 	actions := make([]interface{}, 10)
 	switch s.status {
-	case 1: //follower
+	case FOLLOWER:
 		if s.curTerm < term {
 			s.curTerm = term
 			s.votedFor = 0
@@ -328,7 +323,7 @@ func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, succes
 			}
 			actions[0] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 		}
-	case 2: //candidate
+	case CANDIDATE:
 		if s.curTerm < term {
 			s.status = 1
 			s.curTerm = term
@@ -339,7 +334,7 @@ func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, succes
 			actions[0] = Alarm{timeout:s.electionTimeout}
 			actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 		}
-	case 3: //leader
+	case LEADER:
 		if s.curTerm < term {
 			actions[0] = Alarm{timeout:s.electionTimeout}
 			s.status = 1
@@ -360,7 +355,7 @@ func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, succes
 					trm,_ := s.lg.Get(s.nextIndex[id-1])
 					ptrm,_ := s.lg.Get(s.nextIndex[id-1]-1)
 					d,_ := s.lg.Get(s.nextIndex[id-1])
-					actions[0] = Send{id, AppendEntriesReqEv{term:trm.(LogEntries).Term, lid: s.id, prevLogIndex:s.nextIndex[id-1]-1, prevLogTerm:ptrm.(LogEntries).Term, fl:1, data:d.(LogEntries).Data, leaderCommit:s.commitIndex}}
+					actions[0] = Send{id, AppendEntriesReqEv{term:trm.(LogEntry).Term, lid: s.id, prevLogIndex:s.nextIndex[id-1]-1, prevLogTerm:ptrm.(LogEntry).Term, fl:1, data:d.(LogEntry).Data, leaderCommit:s.commitIndex}}
 				}
 				for i := 0; i < len(s.peers); i++ {
 					if s.majority[i] == 1 {
@@ -379,7 +374,7 @@ func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, succes
 				trm,_ := s.lg.Get(s.nextIndex[id-1])
 				ptrm,_ := s.lg.Get(s.nextIndex[id-1]-1)
 				d,_ := s.lg.Get(s.nextIndex[id-1])
-				actions[0] = Send{id, AppendEntriesReqEv{term:trm.(LogEntries).Term, lid:s.id, prevLogIndex:s.nextIndex[id-1]-1, prevLogTerm:ptrm.(LogEntries).Term, fl:1, data:d.(LogEntries).Data, leaderCommit: s.commitIndex}}
+				actions[0] = Send{id, AppendEntriesReqEv{term:trm.(LogEntry).Term, lid:s.id, prevLogIndex:s.nextIndex[id-1]-1, prevLogTerm:ptrm.(LogEntry).Term, fl:1, data:d.(LogEntry).Data, leaderCommit: s.commitIndex}}
 			}
 		}
 	}
@@ -389,7 +384,7 @@ func (s *SM) voteReq(id int, term int, logIndex int64, logTerm int) []interface{
 	actions := make([]interface{}, 10)
         //fmt.Println("VoteReq received")
 	switch s.status {
-	case 1: //follower
+	case FOLLOWER:
 		if s.curTerm <= term {
 			if s.votedFor == 0 || s.votedFor == id {
 				actions[0] = Alarm{timeout:s.electionTimeout}
@@ -411,7 +406,7 @@ func (s *SM) voteReq(id int, term int, logIndex int64, logTerm int) []interface{
 		} else {
 			actions[0] = Send{id, VoteRespEv{id: s.id, term: s.curTerm, vote: false}}
 		}
-	case 2: //candidate
+	case CANDIDATE:
 		if s.curTerm <= term {
 			s.status = 1
 			s.curTerm = term
@@ -425,7 +420,7 @@ func (s *SM) voteReq(id int, term int, logIndex int64, logTerm int) []interface{
 		} else {
 			actions[0] = Send{id, VoteRespEv{id: s.id, term: s.curTerm, vote: false}}
 		}
-	case 3: //leader
+	case LEADER:
 		if s.curTerm < term {
 			s.status = 1
 			s.curTerm = term
@@ -457,13 +452,13 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 	vr := 0
 	j := 1
 	switch s.status {
-	case 1: //follower
+	case FOLLOWER:
 		if s.curTerm < term {
 			s.curTerm = term
 			s.votedFor = 0
 			actions[0] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 		}
-	case 2: //candidate
+	case CANDIDATE:
 		if s.curTerm < term {
 			s.status = 1
 			s.curTerm = term
@@ -486,11 +481,6 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 				}
 			}
 			if vr >= (len(s.peers)/2)+1 {
-				//fmt.Println("***************************************")
-				//fmt.Println("***************************************")
-				//fmt.Println("***********Leader Elected**************")
-				//fmt.Println("***************************************")
-				//fmt.Println("***************************************")
 				s.status = 3
 				s.lid = s.id
 				// fmt.Println("---------- Leader Id ",s.lid,"--------")
@@ -508,7 +498,7 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 				}
 			}
 		}
-	case 3: //leader
+	case LEADER:
 		if s.curTerm < term {
 			s.status = 1
 			s.curTerm = term
@@ -525,11 +515,10 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 }
 
 func (s *SM) timeout() []interface{} {
-	//fmt.Println("In timeout")
 	actions := make([]interface{}, 10)
 	j := 1
 	switch s.status {
-	case 1: //follower
+	case FOLLOWER:
 		s.curTerm++
 		s.status = 2
 		for i := 0; i < len(s.majority); i++ {
@@ -552,7 +541,7 @@ func (s *SM) timeout() []interface{} {
 				j++
 			}
 		}
-	case 2: //candidate
+	case CANDIDATE:
 		s.votedFor = s.id
 		actions[0] = Alarm{timeout:s.electionTimeout}
 		actions[j] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
@@ -567,7 +556,7 @@ func (s *SM) timeout() []interface{} {
 				j++
 			}
 		}
-	case 3: //leader
+	case LEADER:
 		actions[0] = Alarm{timeout:s.heartbeatTimeout}
 		//fmt.Println("Sending heartbeat")
 		for i := 0; i < len(s.peers); i++ {
@@ -577,6 +566,5 @@ func (s *SM) timeout() []interface{} {
 			}
 		}
 	}
-	//fmt.Println("In SM, actions = ",actions)
 	return actions
 }

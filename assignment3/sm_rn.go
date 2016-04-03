@@ -162,13 +162,10 @@ func makeRafts() ([]*RaftNode) {
 	
 	leaderId = -1
 
-	//makeraft
 	clconfig := cluster.Config{Peers:[]cluster.PeerConfig {
 		{Id:1}, {Id:2}, {Id:3},
 	}}
 	cl, _ := mock.NewCluster(clconfig)
-	//if err != nil {return nil, err}
-	//fmt.Println(reflect.TypeOf(cluster))
 
 	//init the raft node layer
 	nodes := make([]*RaftNode, len(clconfig.Peers))
@@ -194,7 +191,7 @@ func makeRafts() ([]*RaftNode) {
 		ni := make([]int64,3)
 		peer := make([]int,3)
 		log, err := log.Open(raftNode.LogDir)
-		log.RegisterSampleEntry(LogEntries{})
+		log.RegisterSampleEntry(LogEntry{})
 		if err!=nil {
 			fmt.Println("Error opening Log File")
 		}
@@ -218,7 +215,7 @@ func makeRafts() ([]*RaftNode) {
 			ci = m.CommitIndex
 			li = log.GetLastIndex()
 			t,_ := log.Get(li)
-			lt = t.(LogEntries).Term
+			lt = t.(LogEntry).Term
 			for j:=0;j<3;j++ {
 				ni[j]=li+1
 			}
