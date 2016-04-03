@@ -56,7 +56,7 @@ type RaftNode struct { // implements Node interface
 }
 
 func NewRN(Id int, config ConfigRN) (raftNode *RaftNode) {
-	rand.Seed(time.Now().UTC().UnixNano()*int64(Id))
+	//rand.Seed(time.Now().UTC().UnixNano()*int64(Id))
 	cc := make(chan *CommitInfo)
 	t := time.NewTimer(time.Duration(config.ElectionTimeout)*time.Millisecond)
 	rn := &RaftNode{id:Id, lid:-1, timeoutCh:t, commitChannel:cc, StateDir:"StateStore"+strconv.Itoa(Id)+".json", LogDir:"LogDir"+strconv.Itoa(Id)}
@@ -222,7 +222,13 @@ func makeRafts() ([]*RaftNode) {
 				ni[j]=li+1
 			}
 		}
-		raftNode.sm = &SM{id:srv.Pid(), lid:-1,peers:peer,status:1, curTerm:ct, votedFor:vf, majority:m, commitIndex:ci, lg:log, logIndex:li, logTerm:lt, nextIndex:ni, electionTimeout:raftConfig.ElectionTimeout, heartbeatTimeout:raftConfig.HeartbeatTimeout}
+		//** DEBUG **/
+		electionTimeOut := 500
+		if srv.Pid() != 1 {
+			electionTimeOut = 10000
+		}
+		//** DEBUG **/
+		raftNode.sm = &SM{id:srv.Pid(), lid:-1,peers:peer,status:1, curTerm:ct, votedFor:vf, majority:m, commitIndex:ci, lg:log, logIndex:li, logTerm:lt, nextIndex:ni, electionTimeout: electionTimeOut, heartbeatTimeout:raftConfig.HeartbeatTimeout}
 		//raftNode.sm.log.RegisterSampleEntry(LogEntries{})	
 		nodes[i-1] = raftNode
 	}

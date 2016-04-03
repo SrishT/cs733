@@ -4,11 +4,21 @@ import (
 	"fmt"
 	"time"
 	"testing"
+	"os"
 	//"github.com/cs733-iitb/log"
 	//"github.com/cs733-iitb/cluster"
 	//"github.com/cs733-iitb/cluster/mock"
 	//"github.com/SrishT/cs733/assignment3/r"
 )
+
+func Test_start(t *testing.T) {
+	os.RemoveAll("LogDir1")
+	os.RemoveAll("LogDir2")
+	os.RemoveAll("LogDir3")
+	os.RemoveAll("StateStore1.json")
+	os.RemoveAll("StateStore2.json")
+	os.RemoveAll("StateStore3.json")
+}
 
 func Test_basic(t *testing.T) {
 	nodes:=makeRafts()
@@ -28,7 +38,9 @@ func Test_basic(t *testing.T) {
 	//fmt.Println("*******************************************")
 	//fmt.Println("*******************************************")
 	l:=LeaderId(nodes)
+	println("**** leader Id = ", l)
 	n1:=nodes[l-1].sm.lg.GetLastIndex()
+	
 	nodes[l-1].Append("hello")
 	//time.Sleep(time.Second*10)
 	//fmt.Println("************** Monitoring Commit Channel ******************")

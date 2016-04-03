@@ -24,6 +24,8 @@ type SaveState struct {
 	commitIndex int64
 }
 
+//sriram - LogEntries is plural, whereas the struct represents a single log entry
+//         Names really matter. Misuse of them can give rise to a lot of errors.
 type LogEntries struct {
 	Term int
 	Data []byte
@@ -38,6 +40,10 @@ type SM struct {
 	votedFor    int
 	majority    []int
 	commitIndex int64
+	// sriram-Why does the state machine have a single logEntry? What can it possibly
+	//  do with it. Remove it and fix the rest of the code. This was also your bug.
+	// Also, notice that the type of logEntry is "logEntries" .. a singular
+	//  object is given a plural type ... pay attention this kind of stuff
 	logEntry    LogEntries
 	lg	    *log.Log
 	logTerm     int
@@ -131,6 +137,7 @@ func (s *SM) ProcessEvent(ev interface{}) []interface{} {
 		actions := s.voteResp(cmd.id, cmd.term, cmd.vote)
 		return actions
 	default:
+		// sriram -- panic("Unrecognized"). If control comes here, it is indicative of a bigger problem; don't just print it and continue.
 		println("Unrecognized")
 	}
 	return actions
@@ -141,6 +148,8 @@ func (s *SM) appnd(dat []byte,flag int) []interface{} {
 	j := 0
 	//fmt.Println("**********||||********** In SM Client Append **********||||********** ID : ",s.id," LID : ",s.lid)
 	switch s.status { 
+              // sriram - Don't use 1,2,3. Use const declarations for LEADER, FOLLOWER etc
+
 	case 1: //follower
 		//fmt.Println("---------In SM Follower Client Append--------------")
 		actions[0] = Send{s.lid, AppendEv{dat,flag}}
@@ -156,12 +165,18 @@ func (s *SM) appnd(dat []byte,flag int) []interface{} {
 		s.logEntry.Data = dat
 		s.logEntry.Term = s.curTerm
 		s.lg.Append(s.logEntry)
-		fmt.Println("Storing data in log for node ",s.id," data: ",string(dat),"!")
-		d,_:=s.lg.Get(s.lg.GetLastIndex())
-		//fmt.Println("-----------In SM Leader Client Append Sent Log Store------------")
+		//fmt.Println("Storing data in log for node ",s.id," data: ",string(dat),"!")
+		//d, err:=s.lg.Get(s.lg.GetLastIndex())
+		//if err != nil {
+		//     panic(err)
+		//}
+		// fmt.Println("-----------In SM Leader Client Append Sent Log Store------------")
 		s.majority[s.id-1] = 1
 		for i := 0; i < len(s.peers); i++ {
 			if s.peers[i] != 0 {
+				// sriram - Bad form for printing.
+				//     1. Have a standard schema for printing: (date, node id, data)
+				//     2. Print for a single node always (in the case of a follower)
 				//fmt.Println("Sending Append Req Event to ",s.peers[i])
 				actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: flag, data:dat, leaderCommit: s.commitIndex}}
 				j++
@@ -170,8 +185,8 @@ func (s *SM) appnd(dat []byte,flag int) []interface{} {
 		//fmt.Println(reflect.TypeOf(actions[0]).Name()," ",reflect.TypeOf(actions[1]).Name()," ",reflect.TypeOf(actions[2]).Name())
 		s.logIndex++
 		s.logTerm = s.curTerm
-		fmt.Println("Log indices after storing data : ",s.lg.GetLastIndex()," : ",s.logIndex)
-		fmt.Println("Data : ",string(d.(LogEntries).Data)," Term : ",d.(LogEntries).Term," at node ",s.id)
+		//fmt.Println("Log indices after storing data : ",s.lg.GetLastIndex()," : ",s.logIndex)
+		//fmt.Println("Data : ",string(d.(LogEntries).Data)," Term : ",d.(LogEntries).Term," at node ",s.id)
 	}
 	//fmt.Println("---------Returning actions from logStore--------------")
 	return actions
@@ -186,7 +201,7 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 		if trm < s.curTerm {
 			actions[0] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm, data: dat, success: false}}
 		} else {
-			fmt.Println("AppEntReq at ",s.id," ",prevLogTrm," ",s.logTerm," ",prevLogInd," ",s.logIndex," ",lC," ",s.commitIndex," ",flag)
+			//fmt.Println("AppEntReq at ",s.id," ",prevLogTrm," ",s.logTerm," ",prevLogInd," ",s.logIndex," ",lC," ",s.commitIndex," ",flag)
 			s.lid = lid
 			actions[0] = Alarm{timeout:s.electionTimeout}
 			//fmt.Println("in append 1, data =",cmd)
@@ -198,32 +213,43 @@ func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int
 					actions[1] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex + 1,
 						term: s.curTerm, data: dat, success: true}}
 					actions[2] = LogStore{index: prevLogInd + 1, term: trm, data:dat}
-					fmt.Println("Node : ",s.id," LogIndex before : ",s.logIndex)
+					//fmt.Println("Node : ",s.id," LogIndex before : ",s.logIndex)
 					s.logIndex++
-					fmt.Println("Node : ",s.id," LogIndex after : ",s.logIndex)
+					//fmt.Println("Node : ",s.id," LogIndex after : ",s.logIndex)
 					s.logTerm = trm
 					logEntry.Term = trm
 					logEntry.Data = dat
-					fmt.Println("Before storing, term = ",logEntry.Term," data = ",string(logEntry.Data))
-					e:=s.lg.Append(s.logEntry)
-					if e!=nil {
-						fmt.Println(e)
+
+					// sriram **** DEBUG ****
+					if s.id == 2 {
+						fmt.Println("Before storing, term = ",logEntry.Term," data = ",string(logEntry.Data))
 					}
-					fmt.Println("Storing data in log for node ",s.id," data: ",string(dat),"!")
-					d,_:=s.lg.Get(s.lg.GetLastIndex())
-					fmt.Println("Log indices after storing data : ",s.lg.GetLastIndex()," : ",s.logIndex)
-					fmt.Println("Data : ",string(d.(LogEntries).Data)," Term : ",d.(LogEntries).Term," at node ",s.id)
+					e:=s.lg.Append(logEntry)
+					if e!=nil {
+						panic(e)
+					}
+
+				        // sriram *** DEBUG ****
+					if s.id == 2 {
+						println("@@@@@@@@ CHECKING APPEND @ 2 ")
+						d, err:=s.lg.Get(s.lg.GetLastIndex())
+						if err != nil {
+							panic(err)
+						}
+						fmt.Println("Log indices after storing data : ",s.lg.GetLastIndex()," : ",s.logIndex)
+						fmt.Println("Data : ",string(d.(LogEntries).Data)," Term : ",d.(LogEntries).Term," at node ",s.id)
+					}
 				}
 				//commit
 				//fmt.Println("to commit 1",s.commitIndex,lC)
 				if s.commitIndex < lC {
-					fmt.Println("commiting entries at follower ",s.commitIndex," : ",lC)
+					// fmt.Println("commiting entries at follower ",s.commitIndex," : ",lC)
 					if s.logIndex < lC {
 						s.commitIndex = s.logIndex
 					} else {
 						s.commitIndex = lC
 					}
-					fmt.Println("modified commit indices ",s.commitIndex," : ",lC)
+					//fmt.Println("modified commit indices ",s.commitIndex," : ",lC)
 					actions[3] = Commit{id: s.id, index: s.commitIndex, term: trm, data: dat, err:nil}
 					actions[4] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 				}
@@ -344,7 +370,7 @@ func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, succes
 				//fmt.Println("Votes Recv = ",vr)
 				if vr >= (len(s.peers)/2)+1 {
 					s.commitIndex++
-					fmt.Println("Updating Leader Commit")
+					// fmt.Println("Updating Leader Commit")
 					actions[0] = Commit{id: id, index: index, term: term, data: dat, err: nil}
 					actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 				}
@@ -361,7 +387,7 @@ func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, succes
 }
 func (s *SM) voteReq(id int, term int, logIndex int64, logTerm int) []interface{} {
 	actions := make([]interface{}, 10)
-	fmt.Println("VoteReq received")
+        //fmt.Println("VoteReq received")
 	switch s.status {
 	case 1: //follower
 		if s.curTerm <= term {
@@ -445,6 +471,9 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 			for i := 0; i < len(s.majority); i++ {
 				s.majority[i] = 0
 			}
+			// sriram - always use actions = append(actions, Alarm...)
+			// That way you don't have to track indices. In general, be wary of hard numbers in code. They 
+			// are always subject to change.
 			actions[0] = Alarm{timeout:s.electionTimeout}
 			actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
 		} else {
@@ -464,7 +493,7 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 				//fmt.Println("***************************************")
 				s.status = 3
 				s.lid = s.id
-				fmt.Println("---------- Leader Id ",s.lid,"--------")
+				// fmt.Println("---------- Leader Id ",s.lid,"--------")
 				actions[0] = Alarm{timeout:s.heartbeatTimeout}
 				for i := 0; i < len(s.nextIndex); i++ {
 					s.majority[i] = 0
