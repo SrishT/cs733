@@ -1,10 +1,11 @@
 package raft
 
 import (
+	"os"
 	"fmt"
 	"time"
 	"testing"
-	"os"
+	"strconv"
 	//"github.com/cs733-iitb/log"
 	//"github.com/cs733-iitb/cluster"
 	//"github.com/cs733-iitb/cluster/mock"
@@ -50,7 +51,7 @@ func Test_basic(t *testing.T) {
 		nodes[2].runNode()
 	}()
 
-	time.Sleep(time.Second*2)
+	time.Sleep(time.Second*4)
 
 	l := LeaderId(nodes)
 	ldr := nodes[l-1]
@@ -58,22 +59,50 @@ func Test_basic(t *testing.T) {
 	// sriram -- instead of nodes[l-1], why not have ldr := nodes[l-1], and use ldr.Append(). Ugly to
 	// see nodes[l-1] everywhere.
 	
-	n1:=ldr.sm.lg.GetLastIndex()
-	ldr.Append("hello")
+	//n1:=ldr.sm.lg.GetLastIndex()
+	//ldr.Append("hello")
 	//time.Sleep(time.Second*10)
 	//fmt.Println("************** Monitoring Commit Channel ******************")
 	//for i:=0;i<3;i++ {
-	ev := <-ldr.CommitChannel()
-	if ev.Err != nil {t.Fatal(ev.Err)}
-	fmt.Println("Data commit at node ",l," : ",string(ev.Data))
-	n2:=ldr.sm.lg.GetLastIndex()
-	l=LeaderId(nodes)
-	ldr.Append("user")
-	ev = <-ldr.CommitChannel()
-	if ev.Err != nil {t.Fatal(ev.Err)}
-	fmt.Println("Data commit at node ",l," : ",string(ev.Data))
-	n3:=ldr.sm.lg.GetLastIndex()
-	time.Sleep(time.Second*10)
+	//ev := <-ldr.CommitChannel()
+	//if ev.Err != nil {t.Fatal(ev.Err)}
+	//fmt.Println("Data commit at node ",l," : ",string(ev.Data))
+	//n2:=ldr.sm.lg.GetLastIndex()
+	//l=LeaderId(nodes)
+	//ldr.Append("user")
+	//ev = <-ldr.CommitChannel()
+	//if ev.Err != nil {t.Fatal(ev.Err)}
+	//fmt.Println("Data commit at node ",l," : ",string(ev.Data))
+	//n3:=ldr.sm.lg.GetLastIndex()
+	//time.Sleep(time.Second*10)
+
+	for i:=0;i<10;i++ {
+		ldr.Append(strconv.Itoa(i))
+	}
+
+	for i:=0;i<10;i++ {
+		data,index := CheckCommit(t,ldr)
+		fmt.Println("At ",i," Data Committed = ",data," Index = ",index," i = ",i)
+		//if data!=strconv.Itoa(j){t.Fatal("Incorrect entries")}
+		//----compare with j instead of printing
+	}
+	
+	n:=ldr.sm.lg.GetLastIndex()
+	fmt.Println("Last index at leader : ",n)
+	data,_ := ldr.sm.lg.Get(n)
+	fmt.Println("At leader, Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
+
+	n=nodes[1].sm.lg.GetLastIndex()
+	fmt.Println("Last index at node 2 : ",n)
+	data,_ = nodes[1].sm.lg.Get(n)
+	fmt.Println("At node 2, Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
+
+	n=nodes[2].sm.lg.GetLastIndex()
+	fmt.Println("Last index at node 3 : ",n)
+	data,_ = nodes[2].sm.lg.Get(n)
+	fmt.Println("At node 3, Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
+	
+/*
 	for i:=0;i<3;i++ {
 		fmt.Println("value of i",i+1)
 		data,_ := nodes[i].sm.lg.Get(n2)
@@ -82,14 +111,26 @@ func Test_basic(t *testing.T) {
 		fmt.Println("Node ",i+1," Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
 	}
 	fmt.Println("Indices are ",n1," : ",n2," : ",n3)
-	
+*/	
 
 	// sriram - Ensure that all the Appends() are accounted for in the correct order, automatically.
 	// You should not have any printlns in the test. After all, why would you look at output if you can just
 	// test it test it automatically.
 }
 
+func CheckCommit(t *testing.T,ldr *RaftNode) (string,int64) {
+	for {
+		select {
+		case e := <-ldr.CommitChannel():
+			if e.Err != nil {t.Fatal(e.Err)}
+			d:=string(e.Data)
+			i:=e.Index
+			return d,i
+		}
+	}
+}
+
 // sriram Not really a test, but added to clean up all directories after the test
 func Test_end(t *testing.T) {
-	cleanup()
+	//cleanup()
 }

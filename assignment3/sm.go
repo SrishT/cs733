@@ -3,7 +3,6 @@ package raft
 import (
 	"fmt"
 	"errors"
-	//"reflect"
 	"github.com/cs733-iitb/log"
 )
 
@@ -28,8 +27,6 @@ type SaveState struct {
 	commitIndex int64
 }
 
-//sriram - LogEntries is plural, whereas the struct represents a single log entry
-//         Names really matter. Misuse of them can give rise to a lot of errors.
 type LogEntry struct {
 	Term int
 	Data []byte
@@ -47,6 +44,7 @@ type SM struct {
 	lg	    *log.Log
 	logTerm     int
 	logIndex    int64
+	matchIndex  []int64
 	nextIndex   []int64
 	electionTimeout int
 	heartbeatTimeout int
@@ -90,7 +88,7 @@ type AppendEntriesReqEv struct {
 	lid          int
 	prevLogIndex int64
 	prevLogTerm  int
-	fl	     int
+	flag	     int
 	data	     []byte
 	leaderCommit int64
 }
@@ -103,411 +101,339 @@ type AppendEntriesRespEv struct {
 	success bool
 }
 
+func (s *SM) resetTerm(term int) {
+	s.status = FOLLOWER
+	s.curTerm = term
+	s.votedFor = 0
+	s.resetMajority()
+}
+
+func (s *SM) resetMajority() {
+	for i := 0; i < len(s.majority); i++ {
+		s.majority[i] = 0
+	}
+}
+
+func (s *SM) resetNextIndex() {
+	for i := 0; i < len(s.nextIndex); i++ {
+		s.nextIndex[i] = s.logIndex + 1
+	}
+}
+
+func (s *SM) countMajority(index int64) int {
+	vr := 0	
+	for i := 0; i < len(s.peers); i++ {
+		if index == -1 {
+			if s.majority[i] == 1 {
+				vr++
+			}
+		} else {
+			if s.matchIndex[i] >= index {
+				vr++
+			}
+		}
+	}
+	return vr
+}
+
+func (s *SM) broadCast(flag int, data []byte,actions []interface{}) []interface{} {
+	var cmd interface{}
+	for i := 0; i < len(s.peers); i++ {
+		if s.peers[i] != 0 {
+			if flag == 0 {
+				cmd = AppendEntriesReqEv{s.curTerm,s.id,s.logIndex,s.logTerm,0,[]byte(""),s.commitIndex}
+			} else if flag == 1 {
+				cmd = AppendEntriesReqEv{s.curTerm,s.id,s.logIndex,s.logTerm,flag,data,s.commitIndex}
+				s.nextIndex[s.peers[i]-1]++
+			} else if flag == 2 {
+				cmd = VoteReqEv{s.id,s.curTerm,s.logIndex,s.logTerm}	
+			}
+			actions = append(actions, Send{s.peers[i],cmd})
+		}
+	}
+	return actions
+}
+
 func (s *SM) ProcessEvent(ev interface{}) []interface{} {
-	//fmt.Println("Processing event ",reflect.TypeOf(ev))
-	actions := make([]interface{}, 10)
+	actions := []interface{}{}
 	switch ev.(type) {
 	case AppendEv:
 		cmd := ev.(AppendEv)
-		//fmt.Println("***************** In Append Process Event **************** ",cmd.data," ",cmd.flag)
-		actions := s.appnd(cmd.data, cmd.flag)
+		actions := s.appnd(cmd)
 		return actions
 	case AppendEntriesReqEv:
-		//fmt.Println("NP 1")
 		cmd := ev.(AppendEntriesReqEv)
-		actions := s.appendEntriesReq(cmd.term, cmd.lid, cmd.prevLogIndex, cmd.prevLogTerm, cmd.fl, cmd.data, cmd.leaderCommit)
-		//fmt.Println("NP 3")
+		actions := s.appendEntriesReq(cmd)
 		return actions
 	case AppendEntriesRespEv:
 		cmd := ev.(AppendEntriesRespEv)
-		actions := s.appendEntriesResp(cmd.id, cmd.index, cmd.term, cmd.data, cmd.success)
+		actions := s.appendEntriesResp(cmd)
 		return actions
 	case Timeout:
-		//fmt.Println("Processing Timeout Event")
 		actions := s.timeout()
 		return actions
 	case VoteReqEv:
 		cmd := ev.(VoteReqEv)
-		//fmt.Println("log data",s.id," ",s.logIndex," ",s.logTerm)
-		actions := s.voteReq(cmd.candidateId, cmd.term, cmd.logIndex, cmd.logTerm)
+		actions := s.voteReq(cmd)
 		return actions
 	case VoteRespEv:
 		cmd := ev.(VoteRespEv)
-		actions := s.voteResp(cmd.id, cmd.term, cmd.vote)
+		actions := s.voteResp(cmd)
 		return actions
 	default:
-		// sriram -- panic("Unrecognized"). If control comes here, it is indicative of a bigger problem; don't just print it and continue.
-		println("Unrecognized")
+		panic("Unrecognized")
 	}
 	return actions
 }
 
-func (s *SM) appnd(dat []byte,flag int) []interface{} {
-	actions := make([]interface{}, 10)
+func (s *SM) appnd(e interface{}) []interface{} {
+	actions := []interface{}{}
+	ev := e.(AppendEv)
 	le := LogEntry{}
-	j := 0
 	switch s.status { 
 	case FOLLOWER:
-		//fmt.Println("---------In SM Follower Client Append--------------")
-		actions[0] = Send{s.lid, AppendEv{dat,flag}}
+		actions = append(actions, Send{s.lid,AppendEv{ev.data,ev.flag}})
 	case CANDIDATE:
-		//fmt.Println("----------In SM Candidate Client Append------------")
 		var err error
 		err = errors.New("No Leader")
-		actions[0] = Commit{s.id, -1, 0, dat, err}
+		actions = append(actions, Commit{s.id,-1,0,ev.data,err})
 	case LEADER:
-		//fmt.Println("----------In SM Leader Client Append----------------")
-		actions[j] = LogStore{index: s.logIndex + 1, term: s.curTerm, data: dat} /*----------------correct data------------*/
-		j++
-		le.Data = dat
+		actions = append(actions, LogStore{s.logIndex+1,s.curTerm,ev.data})
+		le.Data = ev.data
 		le.Term = s.curTerm
 		s.lg.Append(le)
-		//fmt.Println("Storing data in log for node ",s.id," data: ",string(dat),"!")
-		//d, err:=s.lg.Get(s.lg.GetLastIndex())
-		//if err != nil {
-		//     panic(err)
-		//}
-		// fmt.Println("-----------In SM Leader Client Append Sent Log Store------------")
-		s.majority[s.id-1] = 1
-		for i := 0; i < len(s.peers); i++ {
-			if s.peers[i] != 0 {
-				// sriram - Bad form for printing.
-				//     1. Have a standard schema for printing: (date, node id, data)
-				//     2. Print for a single node always (in the case of a follower)
-				//fmt.Println("Sending Append Req Event to ",s.peers[i])
-				actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: flag, data:dat, leaderCommit: s.commitIndex}}
-				j++
-			}
-		}
-		//fmt.Println(reflect.TypeOf(actions[0]).Name()," ",reflect.TypeOf(actions[1]).Name()," ",reflect.TypeOf(actions[2]).Name())
+		s.matchIndex[s.id-1] = s.logIndex + 1
+		actions = s.broadCast(1,ev.data,actions)
 		s.logIndex++
 		s.logTerm = s.curTerm
-		//fmt.Println("Log indices after storing data : ",s.lg.GetLastIndex()," : ",s.logIndex)
-		//fmt.Println("Data : ",string(d.(LogEntry).Data)," Term : ",d.(LogEntry).Term," at node ",s.id)
 	}
-	//fmt.Println("---------Returning actions from logStore--------------")
 	return actions
 }
 
-func (s *SM) appendEntriesReq(trm int, lid int, prevLogInd int64, prevLogTrm int, flag int, dat []byte, lC int64) []interface{} {
-	actions := make([]interface{}, 10)
+func (s *SM) appendEntriesReq(e interface{}) []interface{} {
+	actions := []interface{}{}
+	ev := e.(AppendEntriesReqEv)
+	var cmd interface{}
 	le := LogEntry{}
 	switch s.status {
 	case FOLLOWER:
-		//fmt.Println("SP 3")
-		if trm < s.curTerm {
-			actions[0] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm, data: dat, success: false}}
+		if ev.term < s.curTerm {
+			cmd = AppendEntriesRespEv{s.id,s.logIndex,s.curTerm,ev.data,false}
+			actions = append(actions, Send{ev.lid,cmd})
 		} else {
-			//fmt.Println("AppEntReq at ",s.id," ",prevLogTrm," ",s.logTerm," ",prevLogInd," ",s.logIndex," ",lC," ",s.commitIndex," ",flag)
-			s.lid = lid
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			//fmt.Println("in append 1, data =",cmd)
-			if s.logTerm == prevLogTrm && s.logIndex == prevLogInd {
-				//fmt.Println("in append 2, data =",cmd)
-				if flag == 1 {
-					//fmt.Println("here",cmd)
-					s.curTerm = trm /////----------------------------check!! (just added)
-					actions[1] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex + 1,
-						term: s.curTerm, data: dat, success: true}}
-					actions[2] = LogStore{index: prevLogInd + 1, term: trm, data:dat}
-					//fmt.Println("Node : ",s.id," LogIndex before : ",s.logIndex)
-					s.logIndex++
-					//fmt.Println("Node : ",s.id," LogIndex after : ",s.logIndex)
-					s.logTerm = trm
-					le.Term = trm
-					le.Data = dat
-
-					// sriram **** DEBUG ****
-					if s.id == 2 {
-						fmt.Println("Before storing, term = ",le.Term," data = ",string(le.Data))
+			var lt int
+			s.lid = ev.lid
+			s.curTerm = ev.term
+			actions = append(actions,Alarm{s.electionTimeout})
+			if s.logIndex >= ev.prevLogIndex {
+				if ev.prevLogIndex >= 0 {
+					t,err:= s.lg.Get(ev.prevLogIndex)
+					if err!=nil {
+						fmt.Println("error :",ev.prevLogIndex," ",s.logIndex)
 					}
-					e:=s.lg.Append(le)
-					if e!=nil {
-						panic(e)
-					}
-
-				        // sriram *** DEBUG ****
-					if s.id == 2 {
-						println("@@@@@@@@ CHECKING APPEND @ 2 ")
-						d, err:=s.lg.Get(s.lg.GetLastIndex())
-						if err != nil {
-							panic(err)
+					lt = t.(LogEntry).Term
+				} else {
+					lt = 0
+				}
+				if lt == ev.prevLogTerm {
+					if ev.flag == 1 {
+						if s.commitIndex > ev.prevLogIndex {
+							cmd = AppendEntriesRespEv{s.id, s.logIndex, s.curTerm, ev.data, true}
+							actions = append(actions, Send{ev.lid,cmd})
+						} else {
+							if s.logIndex > ev.prevLogIndex {
+								s.lg.TruncateToEnd(ev.prevLogIndex+1)
+							}
+							cmd = AppendEntriesRespEv{s.id, s.logIndex+1, s.curTerm, ev.data, true}
+							actions = append(actions, Send{ev.lid,cmd})
+							actions = append(actions, LogStore{ev.prevLogIndex+1, ev.term, ev.data})
+							s.logIndex++
+							s.logTerm = ev.term
+							le.Term = ev.term
+							le.Data = ev.data
+							e := s.lg.Append(le)
+							if e!=nil {
+								panic(e)
+							}
 						}
-						fmt.Println("Log indices after storing data : ",s.lg.GetLastIndex()," : ",s.logIndex)
-						fmt.Println("Data : ",string(d.(LogEntry).Data)," Term : ",d.(LogEntry).Term," at node ",s.id)
 					}
-				}
-				//commit
-				//fmt.Println("to commit 1",s.commitIndex,lC)
-				if s.commitIndex < lC {
-					// fmt.Println("commiting entries at follower ",s.commitIndex," : ",lC)
-					if s.logIndex < lC {
-						s.commitIndex = s.logIndex
-					} else {
-						s.commitIndex = lC
-					}
-					//fmt.Println("modified commit indices ",s.commitIndex," : ",lC)
-					actions[3] = Commit{id: s.id, index: s.commitIndex, term: trm, data: dat, err:nil}
-					actions[4] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
-				}
-			} else if s.logIndex > prevLogInd && flag == 1 {
-				t,_:= s.lg.Get(prevLogInd)
-				if t.(LogEntry).Term == prevLogTrm {
-					s.lg.TruncateToEnd(prevLogInd) //-----------------------------------handle
-					s.curTerm = trm /////-------------------------------check!! (just added)
-					actions[1] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex + 1,
-						term: s.curTerm, data: dat, success: true}}
-					actions[2] = LogStore{index: prevLogInd + 1, term: trm, data:dat}
-					s.logIndex++
-					s.logTerm = trm
-					le.Term = trm
-					le.Data = dat
-					s.lg.Append(le)
-					if s.commitIndex < lC {
-						if s.logIndex < lC {
+					if s.commitIndex < ev.leaderCommit {
+						if s.logIndex < ev.leaderCommit {
 							s.commitIndex = s.logIndex
 						} else {
-							s.commitIndex = lC
+							s.commitIndex = ev.leaderCommit
 						}
-						actions[3] = Commit{id: s.id, index: s.commitIndex, term: trm, data: dat, err:nil}
-						actions[4] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
-					}	
+						actions = append(actions,Commit{s.id, s.commitIndex, ev.term, ev.data, nil})
+						actions = append(actions,SaveState{s.curTerm, s.votedFor, s.commitIndex})
+					}				
+				} else {
+					cmd = AppendEntriesRespEv{s.id,s.logIndex,s.curTerm,ev.data,false}
+					actions = append(actions,Send{ev.lid,cmd})
 				}
 			} else {
-				actions[1] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm,  data: dat, success: false}}
+				cmd = AppendEntriesRespEv{s.id,s.logIndex,s.curTerm,ev.data,false}
+				actions = append(actions,Send{ev.lid,cmd})
 			}
 		}
 	case CANDIDATE:
-		//fmt.Println("Reached here")
-		if s.curTerm < trm {
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			s.status = 1
-			s.curTerm = trm
-			s.votedFor = 0
-			actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			actions[2] = Send{s.id, AppendEntriesReqEv{term: trm, lid: lid, prevLogIndex: prevLogInd, prevLogTerm: prevLogTrm, fl:flag, data:dat, leaderCommit: lC}}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			actions = append(actions,Alarm{s.electionTimeout})
+			actions = append(actions,SaveState{s.curTerm, s.votedFor, s.commitIndex})
+			cmd = AppendEntriesReqEv{ev.term,ev.lid,ev.prevLogIndex,ev.prevLogTerm,ev.flag,ev.data,ev.leaderCommit}
+			actions = append(actions, Send{s.id,cmd})
 		} else {
-			actions[0] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm, data: dat, success: false}}
+			cmd = Send{ev.lid, AppendEntriesRespEv{s.id, s.logIndex, s.curTerm, ev.data, false}}
+			actions = append(actions, cmd)
 		} 
 	case LEADER:
-		if s.curTerm < trm {
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			s.status = 1
-			s.curTerm = trm
-			s.votedFor = 0
-			actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			actions[2] = Send{s.id, AppendEntriesReqEv{term: trm, lid: lid, prevLogIndex: prevLogInd, prevLogTerm: prevLogTrm, fl:flag , data:dat, leaderCommit: lC}}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			actions = append(actions,Alarm{s.electionTimeout})
+			actions = append(actions,SaveState{s.curTerm, s.votedFor, s.commitIndex})
+			cmd = AppendEntriesReqEv{ev.term,ev.lid,ev.prevLogIndex,ev.prevLogTerm,ev.flag,ev.data,ev.leaderCommit}
+			actions = append(actions, Send{s.id,cmd})
 		} else {
-			actions[0] = Send{lid, AppendEntriesRespEv{id: s.id, index: s.logIndex, term: s.curTerm, data: dat, success: false}}
+			cmd = AppendEntriesRespEv{s.id, s.logIndex, s.curTerm, ev.data, false}
+			actions = append(actions, Send{ev.lid,cmd})
 		}
 
 	}
 	return actions
 }
 
-func (s *SM) appendEntriesResp(id int, index int64, term int, dat []byte, success bool) []interface{} {
-	actions := make([]interface{}, 10)
+func (s *SM) appendEntriesResp(e interface{}) []interface{} {
+	actions := []interface{}{}
+	ev := e.(AppendEntriesRespEv)
+	var cmd interface{}
 	switch s.status {
 	case FOLLOWER:
-		if s.curTerm < term {
-			s.curTerm = term
-			s.votedFor = 0
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			actions[0] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			actions = append(actions, SaveState{s.curTerm, s.votedFor, s.commitIndex})
 		}
 	case CANDIDATE:
-		if s.curTerm < term {
-			s.status = 1
-			s.curTerm = term
-			s.votedFor = 0
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, SaveState{s.curTerm, s.votedFor, s.commitIndex})
 		}
 	case LEADER:
-		if s.curTerm < term {
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			s.status = 1
-			s.curTerm = term
-			s.votedFor = 0
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			actions[0] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, SaveState{s.curTerm, s.votedFor, s.commitIndex})
 		} else {
-			vr := 0
-			//actions[0] = Alarm{timeout:s.heartbeatTimeout}------------------check!!!
-			if success == true && term == s.curTerm {
-				s.majority[id-1] = 1
-				//handle successive entries
-				if index < s.logIndex {
-					s.nextIndex[id-1] = s.nextIndex[id-1] + 1
-					trm,_ := s.lg.Get(s.nextIndex[id-1])
-					ptrm,_ := s.lg.Get(s.nextIndex[id-1]-1)
-					d,_ := s.lg.Get(s.nextIndex[id-1])
-					actions[0] = Send{id, AppendEntriesReqEv{term:trm.(LogEntry).Term, lid: s.id, prevLogIndex:s.nextIndex[id-1]-1, prevLogTerm:ptrm.(LogEntry).Term, fl:1, data:d.(LogEntry).Data, leaderCommit:s.commitIndex}}
+			if ev.success == true && ev.term == s.curTerm {
+				s.matchIndex[ev.id-1] = ev.index
+				if s.nextIndex[ev.id-1] <= s.logIndex {
+					d,_ := s.lg.Get(s.nextIndex[ev.id-1])
+					p,_ := s.lg.Get(s.nextIndex[ev.id-1]-1)
+					cmd = AppendEntriesReqEv{d.(LogEntry).Term,s.id,s.nextIndex[ev.id-1]-1,p.(LogEntry).Term,1, d.(LogEntry).Data, s.commitIndex}
+					actions = append(actions, Send{ev.id,cmd})
+					s.nextIndex[ev.id-1]++
 				}
-				for i := 0; i < len(s.peers); i++ {
-					if s.majority[i] == 1 {
-						vr++
-					}
-				}
-				//fmt.Println("Votes Recv = ",vr)
-				if vr >= (len(s.peers)/2)+1 {
+				votes := s.countMajority(ev.index)
+				if votes >= (len(s.peers)/2)+1 && ev.index > s.commitIndex {
 					s.commitIndex++
-					// fmt.Println("Updating Leader Commit")
-					actions[0] = Commit{id: id, index: index, term: term, data: dat, err: nil}
-					actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+					actions = append(actions, Commit{ev.id,ev.index,ev.term,ev.data,nil})
+					actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 				}
-			} else if success == false && index>0 {
-				s.nextIndex[id-1] = s.nextIndex[id-1]-1
-				trm,_ := s.lg.Get(s.nextIndex[id-1])
-				ptrm,_ := s.lg.Get(s.nextIndex[id-1]-1)
-				d,_ := s.lg.Get(s.nextIndex[id-1])
-				actions[0] = Send{id, AppendEntriesReqEv{term:trm.(LogEntry).Term, lid:s.id, prevLogIndex:s.nextIndex[id-1]-1, prevLogTerm:ptrm.(LogEntry).Term, fl:1, data:d.(LogEntry).Data, leaderCommit: s.commitIndex}}
+			} else if ev.success == false && ev.index > 0 {
+				s.nextIndex[ev.id-1] = s.nextIndex[ev.id-1]-1
+				d,_ := s.lg.Get(s.nextIndex[ev.id-1]-1)
+				p,_ := s.lg.Get(s.nextIndex[ev.id-1]-2)
+				cmd = AppendEntriesReqEv{d.(LogEntry).Term,s.id,s.nextIndex[ev.id-1]-2,p.(LogEntry).Term,1,d.(LogEntry).Data, s.commitIndex}
+				actions = append(actions, Send{ev.id,cmd})
 			}
 		}
 	}
 	return actions
 }
-func (s *SM) voteReq(id int, term int, logIndex int64, logTerm int) []interface{} {
-	actions := make([]interface{}, 10)
-        //fmt.Println("VoteReq received")
+func (s *SM) voteReq(e interface{}) []interface{} {
+	actions := []interface{}{}
+	ev := e.(VoteReqEv)
 	switch s.status {
 	case FOLLOWER:
-		if s.curTerm <= term {
-			if s.votedFor == 0 || s.votedFor == id {
-				actions[0] = Alarm{timeout:s.electionTimeout}
-				s.curTerm = term
-				s.votedFor = 0
-				if s.logTerm < logTerm {
-					s.votedFor = id
-					actions[1] = Send{id, VoteRespEv{id: s.id, term: s.curTerm, vote: true}}
-				} else if s.logTerm == logTerm && s.logIndex <= logIndex {
-					s.votedFor = id
-					actions[1] = Send{id, VoteRespEv{id: s.id, term: s.curTerm, vote: true}}
+		if s.curTerm <= ev.term {
+			if s.votedFor == 0 || s.votedFor == ev.candidateId {
+				actions = append(actions,Alarm{s.electionTimeout})
+				s.resetTerm(ev.term)
+				if s.logTerm < ev.logTerm {
+					s.votedFor = ev.candidateId
+					actions = append(actions,Send{ev.candidateId, VoteRespEv{s.id,s.curTerm,true}})
+				} else if s.logTerm == ev.logTerm && s.logIndex <= ev.logIndex {
+					s.votedFor = ev.candidateId
+					actions = append(actions,Send{ev.candidateId, VoteRespEv{s.id,s.curTerm,true}})
 				} else {
-					actions[1] = Send{id, VoteRespEv{id: s.id, term: s.curTerm, vote: false}}
+					actions = append(actions,Send{ev.candidateId, VoteRespEv{s.id,s.curTerm,false}})
 				}
-				actions[2] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+				actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 			} else {
-				actions[0] = Send{id, VoteRespEv{id: s.id, term: s.curTerm, vote: false}}
+				actions = append(actions, Send{ev.candidateId,VoteRespEv{s.id,s.curTerm,false}})
 			}
 		} else {
-			actions[0] = Send{id, VoteRespEv{id: s.id, term: s.curTerm, vote: false}}
+			actions = append(actions, Send{ev.candidateId,VoteRespEv{s.id,s.curTerm,false}})
 		}
 	case CANDIDATE:
-		if s.curTerm <= term {
-			s.status = 1
-			s.curTerm = term
-			s.votedFor = id
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			actions[1] = Send{id, VoteRespEv{id: s.id, term: term, vote: true}}
-			actions[2] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+		if s.curTerm <= ev.term {
+			s.resetTerm(ev.term)
+			s.votedFor = ev.candidateId
+			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, Send{ev.candidateId, VoteRespEv{s.id,ev.term,true}})
+			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		} else {
-			actions[0] = Send{id, VoteRespEv{id: s.id, term: s.curTerm, vote: false}}
+			actions = append(actions, Send{ev.candidateId, VoteRespEv{s.id,s.curTerm,false}})
 		}
 	case LEADER:
-		if s.curTerm < term {
-			s.status = 1
-			s.curTerm = term
-			s.votedFor = id
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			actions[1] = Send{id, VoteRespEv{id: s.id, term: term, vote: true}}
-			actions[2] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			s.votedFor = ev.candidateId
+			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, Send{ev.candidateId, VoteRespEv{s.id,ev.term,true}})
+			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		} else {
-			actions[0] = Alarm{timeout:s.heartbeatTimeout}
-			j := 1
-			//fmt.Println("Sending heartbeat")
-			for i := 0; i < len(s.peers); i++ {
-				if s.peers[i] != 0 {
-					actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:[]byte(""), leaderCommit: s.commitIndex}}
-					j++
-				}
-			}
+			actions = s.broadCast(0,[]byte(""),actions)
+			actions = append(actions, Alarm{s.heartbeatTimeout})
 		}
 
 	}
 	return actions
 }
 
-func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
-	actions := make([]interface{}, 10)
-	vr := 0
-	j := 1
+func (s *SM) voteResp(e interface{}) []interface{} {
+	actions := []interface{}{}
+	ev := e.(VoteRespEv)
 	switch s.status {
 	case FOLLOWER:
-		if s.curTerm < term {
-			s.curTerm = term
-			s.votedFor = 0
-			actions[0] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		}
 	case CANDIDATE:
-		if s.curTerm < term {
-			s.status = 1
-			s.curTerm = term
-			s.votedFor = 0
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			// sriram - always use actions = append(actions, Alarm...)
-			// That way you don't have to track indices. In general, be wary of hard numbers in code. They 
-			// are always subject to change.
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		} else {
-			if vote == true && term == s.curTerm {
-				s.majority[id-1] = 1
+			if ev.vote == true && ev.term == s.curTerm {
+				s.majority[ev.id-1] = 1
 			}
-			for i := 0; i < len(s.peers); i++ {
-				if s.majority[i] == 1 {
-					vr++
-				}
-			}
-			if vr >= (len(s.peers)/2)+1 {
-				s.status = 3
+			votes := s.countMajority(-1)
+			if votes >= (len(s.peers)/2)+1 {
+				s.status = LEADER
 				s.lid = s.id
-				// fmt.Println("---------- Leader Id ",s.lid,"--------")
-				actions[0] = Alarm{timeout:s.heartbeatTimeout}
-				for i := 0; i < len(s.nextIndex); i++ {
-					s.majority[i] = 0
-					s.nextIndex[i] = s.logIndex + 1
-				}
-				//fmt.Println("Sending heartbeat")
-				for i := 0; i < len(s.peers); i++ {
-					if s.peers[i] != 0 {
-						actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:[]byte(""), leaderCommit: s.commitIndex}}
-						j++
-					}
-				}
+				actions = append(actions, Alarm{s.heartbeatTimeout})
+				s.resetMajority()
+				s.resetNextIndex()
+				actions = s.broadCast(0,[]byte(""),actions)
 			}
 		}
 	case LEADER:
-		if s.curTerm < term {
-			s.status = 1
-			s.curTerm = term
-			s.votedFor = 0
-			for i := 0; i < len(s.majority); i++ {
-				s.majority[i] = 0
-			}
-			actions[0] = Alarm{timeout:s.electionTimeout}
-			actions[1] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
+		if s.curTerm < ev.term {
+			s.resetTerm(ev.term)
+			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		}
 
 	}
@@ -515,56 +441,25 @@ func (s *SM) voteResp(id int, term int, vote bool) []interface{} {
 }
 
 func (s *SM) timeout() []interface{} {
-	actions := make([]interface{}, 10)
-	j := 1
+	actions := []interface{}{}
 	switch s.status {
 	case FOLLOWER:
 		s.curTerm++
-		s.status = 2
-		for i := 0; i < len(s.majority); i++ {
-			s.majority[i] = 0
-		}
+		s.status = CANDIDATE
+		s.resetMajority()
 		s.votedFor = s.id
-		//fmt.Println("Voted for self by ",s.id)
-		actions[0] = Alarm{timeout:s.electionTimeout}
-		//fmt.Println("SM1 ",s.id)
-		actions[j] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
-		//fmt.Println("SM2 ",s.id)
-		j++
-		//fmt.Println("SM3 ",s.id)
-		//fmt.Println("s.id", s.id)
-		s.majority[s.id-1] = 1
-		//fmt.Println("SM4 ",s.id)
-		for i := 0; i < len(s.peers); i++ {
-			if s.peers[i] != 0 {
-				actions[j] = Send{s.peers[i], VoteReqEv{candidateId: s.id, term: s.curTerm, logIndex: s.logIndex, logTerm: s.logTerm}}
-				j++
-			}
-		}
+		actions = s.broadCast(2,[]byte(""),actions)
+		actions = append(actions, Alarm{s.electionTimeout})
 	case CANDIDATE:
 		s.votedFor = s.id
-		actions[0] = Alarm{timeout:s.electionTimeout}
-		actions[j] = SaveState{curTerm: s.curTerm, votedFor: s.votedFor, commitIndex: s.commitIndex}
-		j++
-		for i := 0; i < len(s.majority); i++ {
-			s.majority[i] = 0
-		}
+		s.resetMajority()
 		s.majority[s.id-1] = 1
-		for i := 0; i < len(s.peers); i++ {
-			if s.peers[i] != 0 {
-				actions[j] = Send{s.peers[i], VoteReqEv{candidateId: s.id, term: s.curTerm, logIndex: s.logIndex, logTerm: s.logTerm}}
-				j++
-			}
-		}
+		actions = s.broadCast(2,[]byte(""),actions)
+		actions = append(actions, Alarm{s.electionTimeout})
+		actions = append(actions, SaveState{s.curTerm, s.votedFor, s.commitIndex})
 	case LEADER:
-		actions[0] = Alarm{timeout:s.heartbeatTimeout}
-		//fmt.Println("Sending heartbeat")
-		for i := 0; i < len(s.peers); i++ {
-			if s.peers[i] != 0 {
-				actions[j] = Send{s.peers[i], AppendEntriesReqEv{term: s.curTerm, lid: s.id, prevLogIndex: s.logIndex, prevLogTerm: s.logTerm, fl: 0, data:[]byte(""), leaderCommit: s.commitIndex}}
-				j++
-			}
-		}
+		actions = s.broadCast(0,[]byte(""),actions)
+		actions = append(actions, Alarm{s.heartbeatTimeout})
 	}
 	return actions
 }

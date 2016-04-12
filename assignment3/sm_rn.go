@@ -58,7 +58,7 @@ type RaftNode struct { // implements Node interface
 func NewRN(Id int, config ConfigRN) (raftNode *RaftNode) {
 	// sriram - Why randomize? Esp. when you are debugging
 	//rand.Seed(time.Now().UTC().UnixNano()*int64(Id))
-	cc := make(chan *CommitInfo)
+	cc := make(chan *CommitInfo,10000)
 	t := time.NewTimer(time.Duration(config.ElectionTimeout)*time.Millisecond)
 	rn := &RaftNode{id:Id, lid:-1, timeoutCh:t, commitChannel:cc, StateDir:"StateStore"+strconv.Itoa(Id)+".json", LogDir:"LogDir"+strconv.Itoa(Id)}
 	return rn
@@ -130,7 +130,7 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: evn}
 						case AppendEntriesReqEv : c := cmd.event.(AppendEntriesReqEv)
 							//fmt.Println("AppendEntriesReqEv by ",rn.id," term ",rn.sm.curTerm)
-							evn := AppendEntriesReqEv{c.term, c.lid, c.prevLogIndex, c.prevLogTerm, c.fl, c.data, c.leaderCommit}
+							evn := AppendEntriesReqEv{c.term, c.lid, c.prevLogIndex, c.prevLogTerm, c.flag, c.data, c.leaderCommit}
 							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: evn}
 						case AppendEntriesRespEv : c := cmd.event.(AppendEntriesRespEv)
 							//fmt.Println("AppendEntriesReqEv by ",rn.id," term ",rn.sm.curTerm)
@@ -139,7 +139,7 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 					}
 				case Commit: cmd := actions[i].(Commit)
 					//fmt.Println(reflect.TypeOf(cmd).Name())
-					fmt.Println("Commit entry at: ",rn.id," by ",rn.id," term ",rn.sm.curTerm)
+					//fmt.Println("Commit entry at: ",rn.id," by ",rn.id," term ",rn.sm.curTerm)
 					rn.CommitChannel() <- &CommitInfo{Data:cmd.data, Index:cmd.index, Err:cmd.err}
 				case LogStore: _ = actions[i].(LogStore)
 					//fmt.Println("Log Store Event, filename: ",rn.LogDir)
@@ -147,6 +147,7 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 					//rn.sm.log[rn.sm.logIndex+1].term = rn.sm.curTerm
 					//fmt.Println("Log Store at: ",rn.id," Data: ",cmd.data," by ",rn.id," term ",rn.sm.curTerm)
 				case SaveState: cmd := actions[i].(SaveState)
+					//fmt.Println("State store at ",rn.id)
 					m := Message{cmd.curTerm,cmd.votedFor,cmd.commitIndex}
 					b, err := json.Marshal(m)
 					err = ioutil.WriteFile(rn.StateDir,b, 0644)
@@ -188,8 +189,9 @@ func makeRafts() ([]*RaftNode) {
 		srv := cl.Servers[i]
 		p := srv.Peers()
 		m := make([]int,3)
-		ni := make([]int64,3)
 		peer := make([]int,3)
+		ni := make([]int64,3)
+		mi := make([]int64,3)
 		log, err := log.Open(raftNode.LogDir)
 		log.RegisterSampleEntry(LogEntry{})
 		if err!=nil {
@@ -198,6 +200,7 @@ func makeRafts() ([]*RaftNode) {
 		for j:=0;j<3;j++ {
 			m[j]=0
 			ni[j]=0
+			mi[j]=-1
 			if j==i-1 {
 				peer[j]=0
 			}else {
@@ -214,6 +217,7 @@ func makeRafts() ([]*RaftNode) {
 			vf = m.VotedFor
 			ci = m.CommitIndex
 			li = log.GetLastIndex()
+			mi[i-1] = li
 			t,_ := log.Get(li)
 			lt = t.(LogEntry).Term
 			for j:=0;j<3;j++ {
@@ -226,7 +230,7 @@ func makeRafts() ([]*RaftNode) {
 			electionTimeOut = 10000 // ensuring leader 1 is always 1
 		}
 
-		raftNode.sm = &SM{id:srv.Pid(), lid:-1,peers:peer,status:1, curTerm:ct, votedFor:vf, majority:m, commitIndex:ci, lg:log, logIndex:li, logTerm:lt, nextIndex:ni, electionTimeout: electionTimeOut, heartbeatTimeout:raftConfig.HeartbeatTimeout}
+		raftNode.sm = &SM{id:srv.Pid(), lid:-1,peers:peer,status:1, curTerm:ct, votedFor:vf, majority:m, commitIndex:ci, lg:log, logIndex:li, matchIndex:mi, logTerm:lt, nextIndex:ni, electionTimeout: electionTimeOut, heartbeatTimeout:raftConfig.HeartbeatTimeout}
 		//raftNode.sm.log.RegisterSampleEntry(LogEntries{})	
 		nodes[i-1] = raftNode
 	}
