@@ -3,24 +3,19 @@ package raft
 import (
 	"fmt"
 	"time"
-	//"errors"
-	//"reflect"
 	"strconv"
 	"math/rand"
 	"io/ioutil"
 	"encoding/json"
-	"github.com/cs733-iitb/log"
 	"github.com/cs733-iitb/cluster"
 	"github.com/cs733-iitb/cluster/mock"
-	//"github.com/SrishT/cs733/assignment3"
-	//"github.com/SrishT/cs733/assignment3/sm_rn"
 )
 
 const val = 5
 var leaderId int
 
 type Message struct {
-	Term int  //for saveState
+	Term int
 	VotedFor int
 	CommitIndex int64
 }
@@ -32,8 +27,8 @@ type CommitInfo struct {
 }
 
 type ConfigRN struct {
-	cluster 	 []*NetConfig // Information about all servers, including this
-	Id 		 int // this node's id. One of the cluster's entries should match
+	cluster 	 []*NetConfig
+	Id 		 int
 	ElectionTimeout  int
 	HeartbeatTimeout int
 }
@@ -44,7 +39,7 @@ type NetConfig struct {
 	Port int
 }
 
-type RaftNode struct { // implements Node interface
+type RaftNode struct {
 	id int
 	lid int
 	sm *SM
@@ -70,32 +65,14 @@ func (rn *RaftNode) Id() int {
 
 func LeaderId(rn []*RaftNode) int {
 	lid := -1
-	n := 0
-	//------------to check error checking number of leaders
 	for i:=0;i<len(rn);i++ {
 		if rn[i].sm.status == 3 {
-			n++
 			lid = rn[i].sm.id
 		}
 	}
-	fmt.Println("Number of leaders : ",n)
 	return lid
 }
-/*
-func (rn *RaftNode) Get(index int) (error, []byte) {
-	var err error
-	lg, err := log.Open(rn.LogDir)
-	if err==nil {
-		if index < rn.sm.logIndex && index >= 0 {
-			val, e := lg.Get(int64(index))
-			return e, []byte(val)
-		}else{
-			err = errors.New("Not a valid index")
-		}
-	}
-	return err,[]byte("")
-}
-*/
+
 func (rn *RaftNode) CommittedIndex() int64 {
 	return rn.sm.commitIndex
 }
@@ -115,39 +92,23 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 		if actions[i]!=nil {
 			switch actions[i].(type) {
 				case Alarm: cmd := actions[i].(Alarm)
-					//fmt.Println(reflect.TypeOf(cmd).Name())
 					_=rn.timeoutCh.Reset(time.Duration(cmd.timeout+rand.Intn(val))*time.Millisecond)
 				case Send: 
 					cmd := actions[i].(Send)
 					switch cmd.event.(type) {
 						case VoteReqEv : c := cmd.event.(VoteReqEv)
-							//fmt.Println("VoteReqEv by ",rn.id," term ",rn.sm.curTerm)
-							evn := VoteReqEv{c.candidateId, c.term, c.logIndex, c.logTerm}
-							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: evn}
+							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: c}
 						case VoteRespEv : c := cmd.event.(VoteRespEv)
-							//fmt.Println("VoteRespEv by ",rn.id," term ",rn.sm.curTerm)
-							evn := VoteRespEv{c.id, c.term, c.vote}
-							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: evn}
+							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: c}
 						case AppendEntriesReqEv : c := cmd.event.(AppendEntriesReqEv)
-							//fmt.Println("AppendEntriesReqEv by ",rn.id," term ",rn.sm.curTerm)
-							evn := AppendEntriesReqEv{c.term, c.lid, c.prevLogIndex, c.prevLogTerm, c.flag, c.data, c.leaderCommit}
-							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: evn}
+							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: c}
 						case AppendEntriesRespEv : c := cmd.event.(AppendEntriesRespEv)
-							//fmt.Println("AppendEntriesReqEv by ",rn.id," term ",rn.sm.curTerm)
-							evn := AppendEntriesRespEv{c.id,c.index,c.term,c.data,c.success}
-							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: evn}
+							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: c}
 					}
 				case Commit: cmd := actions[i].(Commit)
-					//fmt.Println(reflect.TypeOf(cmd).Name())
-					//fmt.Println("Commit entry at: ",rn.id," by ",rn.id," term ",rn.sm.curTerm)
 					rn.CommitChannel() <- &CommitInfo{Data:cmd.data, Index:cmd.index, Err:cmd.err}
 				case LogStore: _ = actions[i].(LogStore)
-					//fmt.Println("Log Store Event, filename: ",rn.LogDir)
-					//rn.sm.log[rn.sm.logIndex+1].data = cmd.data
-					//rn.sm.log[rn.sm.logIndex+1].term = rn.sm.curTerm
-					//fmt.Println("Log Store at: ",rn.id," Data: ",cmd.data," by ",rn.id," term ",rn.sm.curTerm)
 				case SaveState: cmd := actions[i].(SaveState)
-					//fmt.Println("State store at ",rn.id)
 					m := Message{cmd.curTerm,cmd.votedFor,cmd.commitIndex}
 					b, err := json.Marshal(m)
 					err = ioutil.WriteFile(rn.StateDir,b, 0644)
@@ -157,84 +118,6 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 			}
 		}
 	}
-}
-
-func makeRafts() ([]*RaftNode) {
-	
-	leaderId = -1
-
-	clconfig := cluster.Config{Peers:[]cluster.PeerConfig {
-		{Id:1}, {Id:2}, {Id:3},
-	}}
-	cl, _ := mock.NewCluster(clconfig)
-
-	//init the raft node layer
-	nodes := make([]*RaftNode, len(clconfig.Peers))
-
-	raftConfig := ConfigRN{
-		ElectionTimeout: 1200,
-		HeartbeatTimeout: 500,
-	}
-
-	//Create a raft node, and give the corresponding "Server" object from the
-	//Cluster to help it communicate with the others.
-	for i := 1; i <= 3; i++ {
-		c := 0
-		ct := 0
-		vf := 0
-		lt := 0
-		li := int64(-1)
-		ci := int64(-1)
-		raftNode := NewRN(i, raftConfig)
-		srv := cl.Servers[i]
-		p := srv.Peers()
-		m := make([]int,3)
-		peer := make([]int,3)
-		ni := make([]int64,3)
-		mi := make([]int64,3)
-		log, err := log.Open(raftNode.LogDir)
-		log.RegisterSampleEntry(LogEntry{})
-		if err!=nil {
-			fmt.Println("Error opening Log File")
-		}
-		for j:=0;j<3;j++ {
-			m[j]=0
-			ni[j]=0
-			mi[j]=-1
-			if j==i-1 {
-				peer[j]=0
-			}else {
-				peer[j]=p[c]
-				c++
-			}
-		}
-		raftNode.server = srv
-		file, e := ioutil.ReadFile(raftNode.StateDir)
-    		if e == nil {
-			var m Message
-			err = json.Unmarshal(file, &m)
-			ct = m.Term
-			vf = m.VotedFor
-			ci = m.CommitIndex
-			li = log.GetLastIndex()
-			mi[i-1] = li
-			t,_ := log.Get(li)
-			lt = t.(LogEntry).Term
-			for j:=0;j<3;j++ {
-				ni[j]=li+1
-			}
-		}
-		// sriram ** DEBUG REMOVE AFTER DEBUGGING **/
-		electionTimeOut := 500
-		if srv.Pid() != 1 {
-			electionTimeOut = 10000 // ensuring leader 1 is always 1
-		}
-
-		raftNode.sm = &SM{id:srv.Pid(), lid:-1,peers:peer,status:1, curTerm:ct, votedFor:vf, majority:m, commitIndex:ci, lg:log, logIndex:li, matchIndex:mi, logTerm:lt, nextIndex:ni, electionTimeout: electionTimeOut, heartbeatTimeout:raftConfig.HeartbeatTimeout}
-		//raftNode.sm.log.RegisterSampleEntry(LogEntries{})	
-		nodes[i-1] = raftNode
-	}
-	return nodes
 }
 
 func (rn *RaftNode) runNode() {

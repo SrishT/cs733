@@ -155,7 +155,7 @@ func (s *SM) broadCast(flag int, data []byte,actions []interface{}) []interface{
 }
 
 func (s *SM) ProcessEvent(ev interface{}) []interface{} {
-	actions := []interface{}{}
+	actions := make([]interface{},10)
 	switch ev.(type) {
 	case AppendEv:
 		cmd := ev.(AppendEv)

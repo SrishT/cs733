@@ -6,41 +6,113 @@ import (
 	"time"
 	"testing"
 	"strconv"
-	//"github.com/cs733-iitb/log"
-	//"github.com/cs733-iitb/cluster"
-	//"github.com/cs733-iitb/cluster/mock"
-	//"github.com/SrishT/cs733/assignment3/r"
+	"io/ioutil"
+	"encoding/json"
+	"github.com/cs733-iitb/log"
+	"github.com/cs733-iitb/cluster"
+	"github.com/cs733-iitb/cluster/mock"
 )
 
-// sriram Not really a test, but added to clean up all directories before the test
+var NUMRAFTS = 5
+
 func Test_start(t *testing.T) {
 	cleanup()
 }
 
 func cleanup() {
-	os.RemoveAll("LogDir1")
-	os.RemoveAll("LogDir2")
-	os.RemoveAll("LogDir3")
-	os.RemoveAll("StateStore1.json")
-	os.RemoveAll("StateStore2.json")
-	os.RemoveAll("StateStore3.json")
+	for i:=1; i<= NUMRAFTS; i++ {
+		os.RemoveAll("LogDir"+strconv.Itoa(i))
+		os.RemoveAll("StateStore"+strconv.Itoa(i)+".json")
+	}
+}
+
+func makeRafts() ([]*RaftNode) {
+	
+	leaderId = -1
+
+	clconfig := cluster.Config{Peers:[]cluster.PeerConfig {
+		{Id:1}, {Id:2}, {Id:3}, {Id:4}, {Id:5},
+	}}
+	cl, _ := mock.NewCluster(clconfig)
+
+	nodes := make([]*RaftNode, len(clconfig.Peers))
+
+	raftConfig := ConfigRN{
+		ElectionTimeout: 1200,
+		HeartbeatTimeout: 500,
+	}
+
+	for i := 1; i <= NUMRAFTS; i++ {
+		c := 0
+		ct := 0
+		vf := 0
+		lt := 0
+		li := int64(-1)
+		ci := int64(-1)
+		raftNode := NewRN(i, raftConfig)
+		srv := cl.Servers[i]
+		p := srv.Peers()
+		m := make([]int,NUMRAFTS)
+		peer := make([]int,NUMRAFTS)
+		ni := make([]int64,NUMRAFTS)
+		mi := make([]int64,NUMRAFTS)
+		log, err := log.Open(raftNode.LogDir)
+		log.RegisterSampleEntry(LogEntry{})
+		if err!=nil {
+			fmt.Println("Error opening Log File")
+		}
+		for j:=0;j<NUMRAFTS;j++ {
+			m[j]=0
+			ni[j]=0
+			mi[j]=-1
+			if j==i-1 {
+				peer[j]=0
+			}else {
+				peer[j]=p[c]
+				c++
+			}
+		}
+		raftNode.server = srv
+		file, e := ioutil.ReadFile(raftNode.StateDir)
+    		if e == nil {
+			var m Message
+			err = json.Unmarshal(file, &m)
+			ct = m.Term
+			vf = m.VotedFor
+			ci = m.CommitIndex
+			li = log.GetLastIndex()
+			mi[i-1] = li
+			t,_ := log.Get(li)
+			lt = t.(LogEntry).Term
+			for j:=0;j<NUMRAFTS;j++ {
+				ni[j]=li+1
+			}
+		}
+		// sriram ** DEBUG REMOVE AFTER DEBUGGING **/
+		electionTimeOut := 500
+		if srv.Pid() != 1 {
+			electionTimeOut = 10000 // ensuring leader 1 is always 1
+		}
+
+		raftNode.sm = &SM{id:srv.Pid(), lid:-1,peers:peer,status:1, curTerm:ct, votedFor:vf, majority:m, commitIndex:ci, lg:log, logIndex:li, matchIndex:mi, logTerm:lt, nextIndex:ni, electionTimeout: electionTimeOut, heartbeatTimeout:raftConfig.HeartbeatTimeout}
+		//raftNode.sm.log.RegisterSampleEntry(LogEntries{})	
+		nodes[i-1] = raftNode
+	}
+	return nodes
 }
 
 func Test_basic(t *testing.T) {
 	nodes:=makeRafts()
 	// sriram -- why is the following not in a loop? Hardcoding array indices is almost always a sign 
 	// of a potential bug or repetition
-	/*i:=0
-	for {
+	/*
+	for i:=0; i<3; i++ {
 		go func() {
 			nodes[i].runNode()
 		}()
-		i++
-		if i == 2 {
-			break
-		}
 	}
 	*/
+
 	go func() {
 		nodes[0].runNode()
 	}()
@@ -50,31 +122,18 @@ func Test_basic(t *testing.T) {
 	go func() {
 		nodes[2].runNode()
 	}()
+	go func() {
+		nodes[3].runNode()
+	}()
+	go func() {
+		nodes[4].runNode()
+	}()
 
 	time.Sleep(time.Second*4)
 
 	l := LeaderId(nodes)
 	ldr := nodes[l-1]
 
-	// sriram -- instead of nodes[l-1], why not have ldr := nodes[l-1], and use ldr.Append(). Ugly to
-	// see nodes[l-1] everywhere.
-	
-	//n1:=ldr.sm.lg.GetLastIndex()
-	//ldr.Append("hello")
-	//time.Sleep(time.Second*10)
-	//fmt.Println("************** Monitoring Commit Channel ******************")
-	//for i:=0;i<3;i++ {
-	//ev := <-ldr.CommitChannel()
-	//if ev.Err != nil {t.Fatal(ev.Err)}
-	//fmt.Println("Data commit at node ",l," : ",string(ev.Data))
-	//n2:=ldr.sm.lg.GetLastIndex()
-	//l=LeaderId(nodes)
-	//ldr.Append("user")
-	//ev = <-ldr.CommitChannel()
-	//if ev.Err != nil {t.Fatal(ev.Err)}
-	//fmt.Println("Data commit at node ",l," : ",string(ev.Data))
-	//n3:=ldr.sm.lg.GetLastIndex()
-	//time.Sleep(time.Second*10)
 
 	for i:=0;i<10;i++ {
 		ldr.Append(strconv.Itoa(i))
@@ -83,8 +142,6 @@ func Test_basic(t *testing.T) {
 	for i:=0;i<10;i++ {
 		data,index := CheckCommit(t,ldr)
 		fmt.Println("At ",i," Data Committed = ",data," Index = ",index," i = ",i)
-		//if data!=strconv.Itoa(j){t.Fatal("Incorrect entries")}
-		//----compare with j instead of printing
 	}
 	
 	n:=ldr.sm.lg.GetLastIndex()
@@ -101,21 +158,19 @@ func Test_basic(t *testing.T) {
 	fmt.Println("Last index at node 3 : ",n)
 	data,_ = nodes[2].sm.lg.Get(n)
 	fmt.Println("At node 3, Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
-	
-/*
-	for i:=0;i<3;i++ {
-		fmt.Println("value of i",i+1)
-		data,_ := nodes[i].sm.lg.Get(n2)
-		fmt.Println("Node ",i+1," Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
-		data,_ = nodes[i].sm.lg.Get(n3)
-		fmt.Println("Node ",i+1," Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
-	}
-	fmt.Println("Indices are ",n1," : ",n2," : ",n3)
-*/	
 
-	// sriram - Ensure that all the Appends() are accounted for in the correct order, automatically.
-	// You should not have any printlns in the test. After all, why would you look at output if you can just
-	// test it test it automatically.
+	n=nodes[3].sm.lg.GetLastIndex()
+	fmt.Println("Last index at node 4 : ",n)
+	data,_ = nodes[3].sm.lg.Get(n)
+	fmt.Println("At node 4, Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
+
+	n=nodes[4].sm.lg.GetLastIndex()
+	fmt.Println("Last index at node 5 : ",n)
+	data,_ = nodes[4].sm.lg.Get(n)
+	fmt.Println("At node 5, Data: ",string(data.(LogEntry).Data)," Term: ",data.(LogEntry).Term)
+	
+	//cl.Partition([]int{1, 2, 3}, []int{4, 5})
+	
 }
 
 func CheckCommit(t *testing.T,ldr *RaftNode) (string,int64) {
@@ -130,7 +185,6 @@ func CheckCommit(t *testing.T,ldr *RaftNode) (string,int64) {
 	}
 }
 
-// sriram Not really a test, but added to clean up all directories after the test
 func Test_end(t *testing.T) {
 	//cleanup()
 }
