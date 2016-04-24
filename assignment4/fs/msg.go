@@ -50,6 +50,7 @@ type Msg struct {
 	Numbytes int
 	Exptime  int // expiry time in seconds
 	Version  int
+	Ldr	 string
 }
 
 func GetMsg(reader *bufio.Reader) (msg *Msg, msgerr error, fatalerr error) {
