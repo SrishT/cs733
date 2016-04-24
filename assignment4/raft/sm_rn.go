@@ -41,14 +41,6 @@ type ConfigRN struct {
 	HeartbeatTimeout int
 }
 
-/*
-type NetConfig struct {
-	Id   int
-	Host string
-	Port int
-}
-*/
-
 type RaftNode struct {
 	id int
 	lid int
@@ -56,6 +48,7 @@ type RaftNode struct {
 	Flag bool
 	LogDir string
 	StateDir string
+	cluster *mock.MockCluster
 	timeoutCh *time.Timer
 	server *mock.MockServer
 	commitChannel chan *CommitInfo
@@ -114,7 +107,7 @@ func NewRN(Id int, config *ConfigRN) (raftNode *RaftNode) {
 	//rand.Seed(time.Now().UTC().UnixNano()*int64(Id))
 	cc := make(chan *CommitInfo,10000)
 	t := time.NewTimer(time.Duration(config.ElectionTimeout)*time.Millisecond)
-	rn := &RaftNode{id:Id, lid:-1, Flag:true, timeoutCh:t, commitChannel:cc, StateDir:"StateStore"+strconv.Itoa(Id)+".json", LogDir:"LogDir"+strconv.Itoa(Id)}
+	rn := &RaftNode{id:Id, lid:-1, Flag:true, timeoutCh:t, commitChannel:cc, StateDir:"StateStore"+strconv.Itoa(Id)+".json", LogDir:"LogDir"+strconv.Itoa(Id), cluster:config.Cluster}
 	return rn
 }
 
@@ -138,7 +131,9 @@ func (rn *RaftNode) Append(data interface{}) {
 
 func (rn *RaftNode) Shutdown() {
 	rn.Flag = false
-	//close cluster & logfile & timer
+	rn.sm.lg.Close()
+	rn.cluster.Close()
+	rn.timeoutCh.Stop()
 }
 
 func (rn *RaftNode) CommitChannel() chan *CommitInfo {
