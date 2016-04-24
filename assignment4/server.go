@@ -64,6 +64,8 @@ func reply(conn *net.TCPConn, msg *fs.Msg) bool {
 		resp = "ERR_CMD_ERR"
 	case 'I':
 		resp = "ERR_INTERNAL"
+	case 'R':
+		resp = "ERR_REDIRECT "+msg.Ldr
 	default:
 		fmt.Printf("Unknown response kind '%c'", msg.Kind)
 		return false
@@ -105,23 +107,22 @@ func (ch *ClientHandler) serve(conn *net.TCPConn,uid int) {
 }
 
 func (ch *ClientHandler) monitorRaftChan() {
+	response := &fs.Msg{}
 	for ch.rn.Flag == true {
 		e := <- ch.rn.CommitChannel()
+		fmt.Println("Processing msg at FS of ",ch.rn.Id())
+		var data raft.Data 
+		_ = json.Unmarshal(e.Data, &data)
 		if e.Err !=nil {
-			fmt.Println("Error",e.Err)
-			/*
-			ldr := ch.address[ch.rn.LeaderId()]
-			send ERR_REDIRECT(ldr)
-			*/
+			fmt.Println("Error Redirecting",e.Err)
+			response.Kind = 'R'
+			response.Ldr = ch.address[ch.rn.LeaderId()]
 		} else {
-			fmt.Println("Processing msg at FS of ",ch.rn.Id())
-			var data raft.Data 
-			_ = json.Unmarshal(e.Data, &data)
 			fmt.Println("Server : ",ch.rn.Id()," Leader : ",ch.rn.LeaderId()," Msg : ",string(data.Msg.Contents)," ",data.Msg.Filename," ",string(data.Msg.Kind)," Uid : ",data.Uid)
-			response := ch.fileserv.ProcessMsg(data.Msg)
+			response = ch.fileserv.ProcessMsg(data.Msg)
 			fmt.Println("Response from file server : ",string(response.Kind))
-			ch.ReplyChannel(data.Uid)<-response
 		}
+		ch.ReplyChannel(data.Uid)<-response
 	}
 }
 
