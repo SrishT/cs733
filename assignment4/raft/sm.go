@@ -194,10 +194,12 @@ func (s *SM) appnd(e interface{}) []interface{} {
 	le := LogEntry{}
 	switch s.status { 
 	case FOLLOWER:
-		actions = append(actions, Send{s.lid,AppendEv{ev.data,ev.flag}})
+		var err error
+		err = errors.New("Redirect")
+		actions = append(actions, Commit{s.id,-1,0,ev.data,err})
 	case CANDIDATE:
 		var err error
-		err = errors.New("No Leader")
+		err = errors.New("Redirect")
 		actions = append(actions, Commit{s.id,-1,0,ev.data,err})
 	case LEADER:
 		actions = append(actions, LogStore{s.logIndex+1,s.curTerm,ev.data})
