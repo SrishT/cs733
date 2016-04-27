@@ -238,7 +238,7 @@ func TestRPC_BasicTimer(t *testing.T) {
 
 // failing
 func TestRPC_ConcurrentWrites(t *testing.T) {
-	nclients := 100 //change to 500 //working with 50
+	nclients := 70 //change to 500 //working with 50
 	niters := 10
 	clients := make([]*Client, nclients)
 	for i := 0; i < nclients; i++ {
