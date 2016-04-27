@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"fmt"
 	_ "fmt"
 	"sync"
 	"time"
@@ -132,12 +131,10 @@ func (f *FileServer) processCas(msg *Msg) *Msg {
 
 func (f *FileServer) processDelete(msg *Msg) *Msg {
 	//--debug
-	fmt.Println("In Process Delete")
 	f.fs.Lock()
 	defer f.fs.Unlock()
 	fi := f.fs.dir[msg.Filename]
 	if fi != nil {
-		fmt.Println("In PD No Err")
 		if msg.Version > 0 && fi.version != msg.Version {
 			// non-zero msg.Version indicates a delete due to an expired timer
 			return nil // nothing to do
@@ -146,7 +143,6 @@ func (f *FileServer) processDelete(msg *Msg) *Msg {
 		delete(f.fs.dir, msg.Filename)
 		return ok(0)
 	} else {
-		fmt.Println("In PD F Err")
 		return &Msg{Kind: 'F'} // file not found
 	}
 
