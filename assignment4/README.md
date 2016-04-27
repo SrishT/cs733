@@ -45,7 +45,7 @@ The format for each of the four commands is shown below,
 |cas _filename_ _version_ _numbytes_ [_exptime_]\r\n</br>_content bytes_\r\n| OK _version_\r\n | ERR\_VERSION _newversion_
 |delete _filename_ \r\n| OK\r\n | ERR_FILE_NOT_FOUND
 
-In addition the to the semantic error responses in the table above, all commands can get two additional errors. `ERR_CMD_ERR` is returned on a malformed command, `ERR_INTERNAL` on, well, internal errors. There is an additional error `ER_REDIRECT <url>` that the client receives in case it is sending the commands to the node which is not the leader.
+In addition the to the semantic error responses in the table above, all commands can get two additional errors. `ERR_CMD_ERR` is returned on a malformed command, `ERR_INTERNAL` on, well, internal errors. There is an additional error `ERR_REDIRECT <url>` that the client receives in case it is sending the commands to the node which is not the leader.
 
 For `write` and `cas` and in the response to the `read` command, the content bytes is on a separate line. The length is given by _numbytes_ in the first line.
 
