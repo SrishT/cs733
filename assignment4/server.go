@@ -83,7 +83,6 @@ func (ch *ClientHandler) serve(conn *net.TCPConn,uid int) {
 	reader := bufio.NewReader(conn)
 	for {
 		msg, msgerr, fatalerr := fs.GetMsg(reader)
-		//fmt.Println("Msg from client : ",string(msg.Kind))
 		if fatalerr != nil || msgerr != nil {
 			reply(conn, &fs.Msg{Kind: 'M'})
 			conn.Close()
@@ -96,7 +95,6 @@ func (ch *ClientHandler) serve(conn *net.TCPConn,uid int) {
 			}
 		}
 		data := &raft.Data{uid,msg}
-		fmt.Println("Sending msg for append at ",ch.rn.Id())
 		ch.rn.Append(data)
 		response := <- ch.ReplyChannel(uid)
 		if !reply(conn, response) {
@@ -110,17 +108,13 @@ func (ch *ClientHandler) monitorRaftChan() {
 	response := &fs.Msg{}
 	for ch.rn.Flag == true {
 		e := <- ch.rn.CommitChannel()
-		fmt.Println("Processing msg at FS of ",ch.rn.Id())
 		var data raft.Data 
 		_ = json.Unmarshal(e.Data, &data)
 		if e.Err !=nil {
-			fmt.Println("Error Redirecting",e.Err)
 			response.Kind = 'R'
-			response.Ldr = ch.address[ch.rn.LeaderId()]
+			response.Ldr = ch.address[ch.rn.GetLeaderId()]
 		} else {
-			fmt.Println("Server : ",ch.rn.Id()," Leader : ",ch.rn.LeaderId()," Msg : ",string(data.Msg.Contents)," ",data.Msg.Filename," ",string(data.Msg.Kind)," Uid : ",data.Uid)
 			response = ch.fileserv.ProcessMsg(data.Msg)
-			fmt.Println("Response from file server : ",string(response.Kind))
 		}
 		ch.ReplyChannel(data.Uid)<-response
 	}
@@ -136,7 +130,7 @@ func serverMain(id int,config *raft.ConfigRN, addr map[int]string) {
 	f := fs.Initialize()
 	ch := &ClientHandler{rn:r,clients:m,fileserv:f,address:addr}
 	go ch.monitorRaftChan()
-	for {
+	for ch.rn.Flag == true {
 		tcp_conn, err := tcp_acceptor.AcceptTCP()
 		check(err)
 		uid := UID
