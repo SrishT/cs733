@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"	
 	"time"
-	"sync"
+	//"sync"
 	"bufio"
 	"bytes"
 	"errors"
@@ -17,6 +17,11 @@ import (
 	"github.com/SrishT/cs733/assignment4/raft"
 )
 
+var Handler []*ClientHandler
+var Nodes []*raft.RaftNode
+var addr map[int]string
+var ldr int
+ 
 func Test_start(t *testing.T) {
 	cleanup()
 }
@@ -29,10 +34,12 @@ func cleanup() {
 }
 
 func TestRPCMain(t *testing.T) {
+	Handler = make([]*ClientHandler,raft.NUMRAFTS)
+	Nodes = make([]*raft.RaftNode,raft.NUMRAFTS)
 	clconfig := cluster.Config{Peers:[]cluster.PeerConfig {
 		{Id:1}, {Id:2}, {Id:3}, {Id:4}, {Id:5},
 	}}
-	addr := map[int]string {1:"localhost:8081",2:"localhost:8082",3:"localhost:8083",4:"localhost:8084",5:"localhost:8085"}
+	addr = map[int]string {1:"localhost:8081",2:"localhost:8082",3:"localhost:8083",4:"localhost:8084",5:"localhost:8085"}
 	cl, _ := mock.NewCluster(clconfig)
 	for i:=1;i<=raft.NUMRAFTS;i++ {
 		config := &raft.ConfigRN{Id:i,Cluster:cl,ElectionTimeout:1000,HeartbeatTimeout:500,}
@@ -40,8 +47,11 @@ func TestRPCMain(t *testing.T) {
 			config.ElectionTimeout=500
 		}
 		go serverMain(i,config,addr)
+		time.Sleep(1*time.Second)
+		Nodes[i-1] = Handler[i-1].rn
 	}
 	time.Sleep(2*time.Second)
+	ldr = raft.LeaderId(Nodes)
 }
 
 func expect(t *testing.T, response *Msg, expected *Msg, errstr string, err error) {
@@ -68,9 +78,8 @@ func expect(t *testing.T, response *Msg, expected *Msg, errstr string, err error
 	}
 }
 
-
 func TestRPC_BasicSequential(t *testing.T) {
-	cl := mkClient(t)
+	cl := mkClient(t,addr[ldr])
 	defer cl.close()
 
 	// Read non-existent file cs733net
@@ -80,7 +89,7 @@ func TestRPC_BasicSequential(t *testing.T) {
 	// Read non-existent file cs733net
 	m, err = cl.delete("cs733net")
 	expect(t, m, &Msg{Kind: 'F'}, "file not found", err)
-	
+
 	// Write file cs733net
 	data := "Cloud fun"
 	m, err = cl.write("cs733net", data, 0)
@@ -116,10 +125,11 @@ func TestRPC_BasicSequential(t *testing.T) {
 	// Expect to not find the file
 	m, err = cl.read("cs733net")
 	expect(t, m, &Msg{Kind: 'F'}, "file not found", err)
+
 }
 
 func TestRPC_Binary(t *testing.T) {
-	cl := mkClient(t)
+	cl := mkClient(t,addr[ldr])
 	defer cl.close()
 
 	// Write binary contents
@@ -135,7 +145,7 @@ func TestRPC_Binary(t *testing.T) {
 
 func TestRPC_Chunks(t *testing.T) {
 	// Should be able to accept a few bytes at a time
-	cl := mkClient(t)
+	cl := mkClient(t,addr[ldr])
 	defer cl.close()
 	var err error
 	snd := func(chunk string) {
@@ -162,7 +172,7 @@ func TestRPC_Chunks(t *testing.T) {
 
 func TestRPC_Batch(t *testing.T) {
 	// Send multiple commands in one batch, expect multiple responses
-	cl := mkClient(t)
+	cl := mkClient(t,addr[ldr])
 	defer cl.close()
 	cmds := "write batch1 3\r\nabc\r\n" +
 		"write batch2 4\r\ndefg\r\n" +
@@ -178,7 +188,7 @@ func TestRPC_Batch(t *testing.T) {
 }
 
 func TestRPC_BasicTimer(t *testing.T) {
-	cl := mkClient(t)
+	cl := mkClient(t,addr[ldr])
 	defer cl.close()
 
 	// Write file cs733, with expiry time of 2 seconds
@@ -236,13 +246,12 @@ func TestRPC_BasicTimer(t *testing.T) {
 // nclients write to the same file. At the end the file should be
 // any one clients' last write
 
-// failing
 func TestRPC_ConcurrentWrites(t *testing.T) {
-	nclients := 70 //change to 500 //working with 50
+	nclients := 70
 	niters := 10
 	clients := make([]*Client, nclients)
 	for i := 0; i < nclients; i++ {
-		cl := mkClient(t)
+		cl := mkClient(t,addr[ldr])
 		if cl == nil {
 			t.Fatalf("Unable to create client #%d", i)
 		}
@@ -296,14 +305,13 @@ func TestRPC_ConcurrentWrites(t *testing.T) {
 // client loops around until each CAS succeeds. The number of concurrent clients has been
 // reduced to keep the testing time within limits.
 
-// failing
 func TestRPC_ConcurrentCas(t *testing.T) {
-	nclients := 10 //change to 100 //works for 10
+	nclients := 10
 	niters := 10
 
 	clients := make([]*Client, nclients)
 	for i := 0; i < nclients; i++ {
-		cl := mkClient(t)
+		cl := mkClient(t,addr[ldr])
 		if cl == nil {
 			t.Fatalf("Unable to create client #%d", i)
 		}
@@ -362,6 +370,44 @@ func TestRPC_ConcurrentCas(t *testing.T) {
 	}
 }
 
+/*
+func TestRPC_Redirect(t *testing.T) {
+	var l int
+	switch ldr {
+		case 1,2,3 : l = 4
+		case 4,5   : l = 2
+	}	
+	cl := mkClient(t,addr[l])
+	defer cl.close()
+	
+	// Read non-existent file cs733new
+	m, err := cl.read("cs733new")
+	expect(t, m, &Msg{Kind: 'R'}, "error redirect", err)
+}
+
+func TestRPC_ShutDown(t *testing.T) {
+	Handler[ldr-1].rn.Shutdown()	
+	time.Sleep(2*time.Second)
+	ldr = raft.LeaderId(Nodes)
+	cl := mkClient(t,addr[ldr])
+	defer cl.close()
+	
+	// Read non-existent file cs733new
+	m, err := cl.read("cs733new")
+	expect(t, m, &Msg{Kind: 'F'}, "file not found", err)
+	
+	Handler[ldr-1].rn.Shutdown()	
+	time.Sleep(2*time.Second)
+	ldr = raft.LeaderId(Nodes)
+	cl = mkClient(t,addr[ldr])
+	defer cl.close()
+	
+	// Read non-existent file cs733new
+	m, err = cl.read("cs733new")
+	expect(t, m, &Msg{Kind: 'F'}, "file not found", err)
+}
+*/
+
 //----------------------------------------------------------------------
 // Utility functions
 
@@ -375,6 +421,7 @@ type Msg struct {
 	Numbytes int
 	Exptime  int // expiry time in seconds
 	Version  int
+	Ldr	 string
 }
 
 func (cl *Client) read(filename string) (*Msg, error) {
@@ -416,9 +463,9 @@ type Client struct {
 	reader *bufio.Reader // a bufio Reader wrapper over conn
 }
 
-func mkClient(t *testing.T) *Client {
+func mkClient(t *testing.T,addr string) *Client {
 	var client *Client
-	raddr, err := net.ResolveTCPAddr("tcp", "localhost:8081")
+	raddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err == nil {
 		conn, err := net.DialTCP("tcp", nil, raddr)
 		if err == nil {
@@ -534,6 +581,9 @@ func parseFirst(line string) (msg *Msg, err error) {
 		msg.Kind = 'M'
 	case "ERR_INTERNAL":
 		msg.Kind = 'I'
+	case "ERR_REDIRECT":
+		msg.Kind = 'R'
+		msg.Ldr = fields[1]
 	default:
 		err = errors.New("Unknown response " + fields[0])
 	}

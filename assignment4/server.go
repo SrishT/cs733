@@ -7,8 +7,6 @@ import (
 	"bufio"
 	"strconv"
 	"encoding/json"
-	"github.com/cs733-iitb/cluster"
-	"github.com/cs733-iitb/cluster/mock"
 	"github.com/SrishT/cs733/assignment4/fs"
 	"github.com/SrishT/cs733/assignment4/raft"
 )
@@ -110,9 +108,17 @@ func (ch *ClientHandler) monitorRaftChan() {
 		e := <- ch.rn.CommitChannel()
 		var data raft.Data 
 		_ = json.Unmarshal(e.Data, &data)
-		if e.Err !=nil {
-			response.Kind = 'R'
-			response.Ldr = ch.address[ch.rn.GetLeaderId()]
+		if e.Err != nil {
+			s := e.Err.Error()
+			if s == "Redirect" {
+				response.Kind = 'R'
+				ldr := ch.rn.GetLeaderId()
+				if ldr != -1 {
+					response.Ldr = ch.address[ch.rn.GetLeaderId()]
+				} else {
+					response.Ldr = "-"
+				}
+			}
 		} else {
 			response = ch.fileserv.ProcessMsg(data.Msg)
 		}
@@ -129,6 +135,7 @@ func serverMain(id int,config *raft.ConfigRN, addr map[int]string) {
 	m := make(map[int]chan *fs.Msg)
 	f := fs.Initialize()
 	ch := &ClientHandler{rn:r,clients:m,fileserv:f,address:addr}
+	Handler[id-1] = ch
 	go ch.monitorRaftChan()
 	for ch.rn.Flag == true {
 		tcp_conn, err := tcp_acceptor.AcceptTCP()
@@ -139,21 +146,4 @@ func serverMain(id int,config *raft.ConfigRN, addr map[int]string) {
 		ch.clients[uid] = replyChan
 		go ch.serve(tcp_conn,uid)
 	}
-}
-
-func main() {
-	id,err := strconv.Atoi(os.Args[1])
-	if err!=nil {
-		panic(err)
-	}
-	clconfig := cluster.Config{Peers:[]cluster.PeerConfig {
-		{Id:1}, {Id:2}, {Id:3}, {Id:4}, {Id:5},
-	}}
-	addr := map[int]string {1:"localhost:8081",2:"localhost:8082",3:"localhost:8083",4:"localhost:8084",5:"localhost:8085"}
-	cl, _ := mock.NewCluster(clconfig)
-	config := &raft.ConfigRN{Id:id,Cluster:cl,ElectionTimeout:1000,HeartbeatTimeout:500,}
-	if id == 1 {
-		config.ElectionTimeout = 500
-	}
-	serverMain(id,config,addr)
 }
