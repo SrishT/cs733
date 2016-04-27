@@ -60,13 +60,13 @@ func Test_basic(t *testing.T) {
 	l := LeaderId(nodes)
 	ldr := nodes[l-1]
 
-	for i:=0;i<1000;i++ {
+	for i:=0;i<100;i++ {
 		sendData(nodes,l,i)
 	}
 
-	time.Sleep(time.Second*2)
+	time.Sleep(time.Second*1)
 	
-	for i:=0;i<1000;i++ {
+	for i:=0;i<100;i++ {
 		CheckCommit(t,nodes,i)
 	}
 
@@ -97,7 +97,7 @@ func Test_basic(t *testing.T) {
 	
 	/* Testing Shutdown */
 	
-	time.Sleep(time.Second*2)
+	time.Sleep(time.Second*3)
 	l1 = LeaderId(nodes)
 	nodes[l1-1].Shutdown()
 	time.Sleep(time.Second*2)
