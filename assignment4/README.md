@@ -1,12 +1,16 @@
-# fs - A simple network file server
+#Distributed File System using RAFT
+
+Given is a simple implementation of a distributed file system which makes use of the RAFT consensus protocol in order to distribute the file system across a cluster of servers (5 in this case) and ensure that each of the servers agrees on the series of actions to be performed locally in their state machines.
+It is comprised of the following parts
+
+## fs - A simple network file server
 
 **fs** is a simple network file server. Access to the server is via a
 simple telnet compatible API. Each file has a version number, and the server keeps the latest version. There are four commands, to read, write, compare-and-swap and delete the file.
 
 **fs** files have an optional expiry time attached to them. In combination with the `cas` command, this facility can be used as a coordination service, much like Zookeeper.
 
-## Sample Usage
-
+### Sample Usage
 
 ```
 > go run server.go & 
@@ -30,7 +34,7 @@ simple telnet compatible API. Each file has a version number, and the server kee
   ghijklm
 ```
 
-## Command Specification
+### Command Specification
 
 The format for each of the four commands is shown below,  
 
@@ -47,16 +51,23 @@ For `write` and `cas` and in the response to the `read` command, the content byt
 
 Files can have an optional expiry time, _exptime_, expressed in seconds. A subsequent `cas` or `write` cancels an earlier expiry time, and imposes the new time. By default, _exptime_ is 0, which represents no expiry. 
 
+
+## raft - A consensus mechanism
+
+**raft** is the layer which is responsible for command replication over each of the file servers in the cluster, and to ensure their consistency. It ensures that the command is handed over to the state machine of a given file server instance of the cluster, only if it has been successfully replicated over a majority of the servers in the cluster.
+
+This coordination is achieved by the leader node, which is one of the nodes in the cluster, which has been voted for by a majority in the cluster.
+
+
 ## Install
 
 ```
-go get github.com/cs733/assignment1
-go test github.com/cs733/assignment1/...
+go get github.com/SrishT/assignment4
+go test github.com/SrishT/assignment4/...
 ```
 
 ## Limits and Limitations
 
-- Port is fixed at 8080
 - Files are in-memory. There's no persistence.
 - If the command or contents line is in error such that the server
   cannot reliably figure out the end of the command, the connection is
@@ -64,9 +75,3 @@ go test github.com/cs733/assignment1/...
   numbytes is not not  numeric, the contents line doesn't end with a
   '\r\n'.
 - The first line of the command is constrained to be less than 500 characters long. If not, an error is returned and the connection is shut donw.
-
-## Contact
-Sriram Srinivasan.
-cs733 _at_ gmail.com
-
-
