@@ -13,9 +13,7 @@ import (
 	"github.com/SrishT/cs733/assignment4/fs"
 )
 
-const val = 5
 var NUMRAFTS = 5
-var leaderId int
 
 type Data struct { //added
 	Uid int
@@ -43,7 +41,6 @@ type ConfigRN struct {
 
 type RaftNode struct {
 	id int
-	lid int
 	sm *SM
 	Flag bool
 	LogDir string
@@ -54,8 +51,7 @@ type RaftNode struct {
 	commitChannel chan *CommitInfo
 }
 
-func MakeRaft(i int,config *ConfigRN) (*RaftNode) {	
-	leaderId = -1
+func MakeRaft(i int,config *ConfigRN) (*RaftNode) {
 	c:=0; ct:=0; vf:=0; lt:=0
 	li:=int64(-1); ci:=int64(-1)
 	raftNode := NewRN(i,config)
@@ -103,11 +99,10 @@ func MakeRaft(i int,config *ConfigRN) (*RaftNode) {
 }
 
 func NewRN(Id int, config *ConfigRN) (raftNode *RaftNode) {
-	// sr - Why randomize? Esp. when you are debugging
-	//rand.Seed(time.Now().UTC().UnixNano()*int64(Id))
+	rand.Seed(time.Now().UTC().UnixNano())
 	cc := make(chan *CommitInfo,10000)
 	t := time.NewTimer(time.Duration(config.ElectionTimeout)*time.Millisecond)
-	rn := &RaftNode{id:Id, lid:-1, Flag:true, timeoutCh:t, commitChannel:cc, StateDir:"StateStore"+strconv.Itoa(Id)+".json", LogDir:"LogDir"+strconv.Itoa(Id), cluster:config.Cluster}
+	rn := &RaftNode{id:Id, Flag:true, timeoutCh:t, commitChannel:cc, StateDir:"StateStore"+strconv.Itoa(Id)+".json", LogDir:"LogDir"+strconv.Itoa(Id), cluster:config.Cluster}
 	return rn
 }
 
@@ -115,8 +110,17 @@ func (rn *RaftNode) Id() int {
 	return rn.id
 }
 
-func (rn *RaftNode) LeaderId() int {
-	return rn.lid
+func (rn *RaftNode) GetLeaderId() int {
+	return rn.sm.lid
+}
+
+func LeaderId(nodes []*RaftNode) int {
+	for i:=0;i<len(nodes);i++ {
+		if nodes[i].sm.status == 3 {
+			return nodes[i].sm.id
+		}
+	}
+	return -1
 }
 
 func (rn *RaftNode) CommittedIndex() int64 {
@@ -131,8 +135,9 @@ func (rn *RaftNode) Append(data interface{}) {
 
 func (rn *RaftNode) Shutdown() {
 	rn.Flag = false
+	rn.sm.status = FOLLOWER
 	rn.sm.lg.Close()
-	rn.cluster.Close()
+	rn.server.Close()
 	rn.timeoutCh.Stop()
 }
 
@@ -145,7 +150,11 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 		if actions[i]!=nil {
 			switch actions[i].(type) {
 				case Alarm: cmd := actions[i].(Alarm)
-					_=rn.timeoutCh.Reset(time.Duration(cmd.timeout+rand.Intn(val))*time.Millisecond)
+					if cmd.flag == 1 {
+						_=rn.timeoutCh.Reset(time.Duration(cmd.timeout+rand.Intn(cmd.timeout))*time.Millisecond)
+					} else {
+						_=rn.timeoutCh.Reset(time.Duration(cmd.timeout)*time.Millisecond)
+					}
 				case Send: 
 					cmd := actions[i].(Send)
 					switch cmd.event.(type) {
@@ -158,7 +167,7 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 						case AppendEntriesRespEv : c := cmd.event.(AppendEntriesRespEv)
 							rn.server.Outbox() <- &cluster.Envelope{Pid: cmd.id, Msg: c}
 					}
-				case Commit: cmd := actions[i].(Commit)
+				case Commit: cmd := actions[i].(Commit)				
 					rn.CommitChannel() <- &CommitInfo{Data:cmd.data, Index:cmd.index, Err:cmd.err}
 				case LogStore: _ = actions[i].(LogStore)
 				case SaveState: cmd := actions[i].(SaveState)
@@ -174,29 +183,15 @@ func (rn *RaftNode) doActions(actions []interface{}) {
 }
 
 func (rn *RaftNode) runNode() {
-	s:=rn.sm
 	actions:=make([]interface{},10)
 	for rn.Flag == true {
 		select {
 		case e := <-rn.server.Inbox():
-			actions = s.ProcessEvent(e.Msg)
-			if s.lid!=-1 && s.status==3 {
-				rn.lid = s.lid
-				leaderId = s.lid
-			}
+			actions = rn.sm.ProcessEvent(e.Msg)
 			rn.doActions(actions)
 		case <-rn.timeoutCh.C:
-			actions = s.ProcessEvent(Timeout{})
-			if s.lid!=-1 && s.status==3 {
-				rn.lid = s.lid
-				leaderId = s.lid
-			}
-			
+			actions = rn.sm.ProcessEvent(Timeout{})
 			rn.doActions(actions)
-		}
-		if leaderId!= -1 && s.lid !=leaderId {
-			s.lid = leaderId
-			rn.lid = leaderId
 		}
 	}
 }

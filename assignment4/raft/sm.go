@@ -75,6 +75,7 @@ type Timeout struct {
 }
 
 type Alarm struct {
+	flag 	int
 	timeout int
 }
 
@@ -85,6 +86,7 @@ type AppendEv struct {
 
 type AppendEntriesReqEv struct {
 	term         int
+	logterm      int
 	lid          int
 	prevLogIndex int64
 	prevLogTerm  int
@@ -141,9 +143,9 @@ func (s *SM) broadCast(flag int, data []byte,actions []interface{}) []interface{
 	for i := 0; i < len(s.peers); i++ {
 		if s.peers[i] != 0 {
 			if flag == 0 {
-				cmd = AppendEntriesReqEv{s.curTerm,s.id,s.logIndex,s.logTerm,0,[]byte(""),s.commitIndex}
+				cmd = AppendEntriesReqEv{s.curTerm,s.curTerm,s.id,s.logIndex,s.logTerm,flag,[]byte(""),s.commitIndex}
 			} else if flag == 1 {
-				cmd = AppendEntriesReqEv{s.curTerm,s.id,s.logIndex,s.logTerm,flag,data,s.commitIndex}
+				cmd = AppendEntriesReqEv{s.curTerm,s.curTerm,s.id,s.logIndex,s.logTerm,flag,data,s.commitIndex}
 				s.nextIndex[s.peers[i]-1]++
 			} else if flag == 2 {
 				cmd = VoteReqEv{s.id,s.curTerm,s.logIndex,s.logTerm}	
@@ -215,46 +217,45 @@ func (s *SM) appendEntriesReq(e interface{}) []interface{} {
 	ev := e.(AppendEntriesReqEv)
 	var cmd interface{}
 	le := LogEntry{}
+	var lt int
 	switch s.status {
 	case FOLLOWER:
 		if ev.term < s.curTerm {
 			cmd = AppendEntriesRespEv{s.id,s.logIndex,s.curTerm,ev.data,false}
 			actions = append(actions, Send{ev.lid,cmd})
-		} else {
-			var lt int
+		} else if ev.flag == 1 {
 			s.lid = ev.lid
 			s.curTerm = ev.term
-			actions = append(actions,Alarm{s.electionTimeout})
+			actions = append(actions,Alarm{1,s.electionTimeout})
 			if s.logIndex >= ev.prevLogIndex {
 				if ev.prevLogIndex >= 0 {
 					t,err:= s.lg.Get(ev.prevLogIndex)
 					if err!=nil {
-						fmt.Println("error :",ev.prevLogIndex," ",s.logIndex)
+						fmt.Println("error :",ev.prevLogIndex," ",s.logIndex," at ",s.id," lid ",ev.lid)
 					}
 					lt = t.(LogEntry).Term
 				} else {
 					lt = 0
 				}
 				if lt == ev.prevLogTerm {
-					if ev.flag == 1 {
-						if s.commitIndex > ev.prevLogIndex {
-							cmd = AppendEntriesRespEv{s.id, s.logIndex, s.curTerm, ev.data, true}
-							actions = append(actions, Send{ev.lid,cmd})
-						} else {
-							if s.logIndex > ev.prevLogIndex {
-								s.lg.TruncateToEnd(ev.prevLogIndex+1)
-							}
-							cmd = AppendEntriesRespEv{s.id, s.logIndex+1, s.curTerm, ev.data, true}
-							actions = append(actions, Send{ev.lid,cmd})
-							actions = append(actions, LogStore{ev.prevLogIndex+1, ev.term, ev.data})
-							s.logIndex++
-							s.logTerm = ev.term
-							le.Term = ev.term
-							le.Data = ev.data
-							e := s.lg.Append(le)
-							if e!=nil {
-								panic(e)
-							}
+					if s.commitIndex > ev.prevLogIndex {
+						cmd = AppendEntriesRespEv{s.id, s.logIndex, s.curTerm, ev.data, true}
+						actions = append(actions, Send{ev.lid,cmd})
+					} else {
+						if s.logIndex > ev.prevLogIndex {
+							s.lg.TruncateToEnd(ev.prevLogIndex+1)
+							s.logIndex = ev.prevLogIndex
+						}
+						cmd = AppendEntriesRespEv{s.id, s.logIndex+1, s.curTerm, ev.data, true}
+						actions = append(actions, Send{ev.lid,cmd})
+						actions = append(actions, LogStore{ev.prevLogIndex+1, ev.term, ev.data})
+						s.logIndex++
+						s.logTerm = ev.logterm
+						le.Term = ev.logterm
+						le.Data = ev.data
+						e := s.lg.Append(le)
+						if e!=nil {
+							panic(e)
 						}
 					}
 					if s.commitIndex < ev.leaderCommit {
@@ -279,13 +280,42 @@ func (s *SM) appendEntriesReq(e interface{}) []interface{} {
 				cmd = AppendEntriesRespEv{s.id,s.logIndex,s.curTerm,ev.data,false}
 				actions = append(actions,Send{ev.lid,cmd})
 			}
+		} else {
+			actions = append(actions,Alarm{1,s.electionTimeout})
+			if s.logIndex >= ev.prevLogIndex {
+				if ev.prevLogIndex >= 0 {
+					t,err:= s.lg.Get(ev.prevLogIndex)
+					if err!=nil {
+						fmt.Println("error :",ev.prevLogIndex," ",s.logIndex)
+					}
+					lt = t.(LogEntry).Term
+				} else {
+					lt = 0
+				}
+				if lt == ev.prevLogTerm {
+					if s.commitIndex < ev.leaderCommit {
+						ci:=s.commitIndex
+						if s.logIndex < ev.leaderCommit {
+							s.commitIndex = s.logIndex
+						} else {
+							s.commitIndex = ev.leaderCommit
+						}
+						for i:= ci; i<s.commitIndex;i++ {
+							i++
+							t,_:= s.lg.Get(i)
+							actions = append(actions,Commit{s.id,i,t.(LogEntry).Term,t.(LogEntry).Data,nil})
+						}
+						actions = append(actions,SaveState{s.curTerm, s.votedFor, s.commitIndex})
+					}
+				}
+			}
 		}
 	case CANDIDATE:
 		if s.curTerm < ev.term {
 			s.resetTerm(ev.term)
-			actions = append(actions,Alarm{s.electionTimeout})
+			actions = append(actions,Alarm{1,s.electionTimeout})
 			actions = append(actions,SaveState{s.curTerm, s.votedFor, s.commitIndex})
-			cmd = AppendEntriesReqEv{ev.term,ev.lid,ev.prevLogIndex,ev.prevLogTerm,ev.flag,ev.data,ev.leaderCommit}
+			cmd = AppendEntriesReqEv{ev.term,ev.logterm,ev.lid,ev.prevLogIndex,ev.prevLogTerm,ev.flag,ev.data,ev.leaderCommit}
 			actions = append(actions, Send{s.id,cmd})
 		} else {
 			cmd = Send{ev.lid, AppendEntriesRespEv{s.id, s.logIndex, s.curTerm, ev.data, false}}
@@ -294,9 +324,9 @@ func (s *SM) appendEntriesReq(e interface{}) []interface{} {
 	case LEADER:
 		if s.curTerm < ev.term {
 			s.resetTerm(ev.term)
-			actions = append(actions,Alarm{s.electionTimeout})
+			actions = append(actions,Alarm{1,s.electionTimeout})
 			actions = append(actions,SaveState{s.curTerm, s.votedFor, s.commitIndex})
-			cmd = AppendEntriesReqEv{ev.term,ev.lid,ev.prevLogIndex,ev.prevLogTerm,ev.flag,ev.data,ev.leaderCommit}
+			cmd = AppendEntriesReqEv{ev.term,ev.logterm,ev.lid,ev.prevLogIndex,ev.prevLogTerm,ev.flag,ev.data,ev.leaderCommit}
 			actions = append(actions, Send{s.id,cmd})
 		} else {
 			cmd = AppendEntriesRespEv{s.id, s.logIndex, s.curTerm, ev.data, false}
@@ -320,23 +350,26 @@ func (s *SM) appendEntriesResp(e interface{}) []interface{} {
 	case CANDIDATE:
 		if s.curTerm < ev.term {
 			s.resetTerm(ev.term)
-			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, Alarm{1,s.electionTimeout})
 			actions = append(actions, SaveState{s.curTerm, s.votedFor, s.commitIndex})
 		}
 	case LEADER:
 		if s.curTerm < ev.term {
 			s.resetTerm(ev.term)
-			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, Alarm{1,s.electionTimeout})
 			actions = append(actions, SaveState{s.curTerm, s.votedFor, s.commitIndex})
 		} else {
 			if ev.success == true && ev.term == s.curTerm {
-				s.matchIndex[ev.id-1] = ev.index
+				if s.matchIndex[ev.id-1] < ev.index {
+					s.matchIndex[ev.id-1] = ev.index
+				}
 				if s.nextIndex[ev.id-1] <= s.logIndex {
 					d,_ := s.lg.Get(s.nextIndex[ev.id-1])
 					p,_ := s.lg.Get(s.nextIndex[ev.id-1]-1)
-					cmd = AppendEntriesReqEv{d.(LogEntry).Term,s.id,s.nextIndex[ev.id-1]-1,p.(LogEntry).Term,1, d.(LogEntry).Data, s.commitIndex}
+					cmd = AppendEntriesReqEv{s.curTerm,d.(LogEntry).Term,s.id,s.nextIndex[ev.id-1]-1,p.(LogEntry).Term,1, d.(LogEntry).Data, s.commitIndex}
 					actions = append(actions, Send{ev.id,cmd})
 					s.nextIndex[ev.id-1]++
+				} else {
 				}
 				votes := s.countMajority(ev.index)
 				if votes >= (len(s.peers)/2)+1 && ev.index > s.commitIndex {
@@ -345,10 +378,11 @@ func (s *SM) appendEntriesResp(e interface{}) []interface{} {
 					actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 				}
 			} else if ev.success == false && ev.index > 0 {
-				s.nextIndex[ev.id-1] = s.nextIndex[ev.id-1]-1
-				d,_ := s.lg.Get(s.nextIndex[ev.id-1]-1)
-				p,_ := s.lg.Get(s.nextIndex[ev.id-1]-2)
-				cmd = AppendEntriesReqEv{d.(LogEntry).Term,s.id,s.nextIndex[ev.id-1]-2,p.(LogEntry).Term,1,d.(LogEntry).Data, s.commitIndex}
+				s.nextIndex[ev.id-1] = s.nextIndex[ev.id-1]-2
+				d,_ := s.lg.Get(s.nextIndex[ev.id-1])
+				p,_ := s.lg.Get(s.nextIndex[ev.id-1]-1)
+				cmd = AppendEntriesReqEv{s.curTerm,d.(LogEntry).Term,s.id,s.nextIndex[ev.id-1]-1,p.(LogEntry).Term,1,d.(LogEntry).Data, s.commitIndex}
+				s.nextIndex[ev.id-1]++
 				actions = append(actions, Send{ev.id,cmd})
 			}
 		}
@@ -360,9 +394,9 @@ func (s *SM) voteReq(e interface{}) []interface{} {
 	ev := e.(VoteReqEv)
 	switch s.status {
 	case FOLLOWER:
-		if s.curTerm <= ev.term {
-			if s.votedFor == 0 || s.votedFor == ev.candidateId {
-				actions = append(actions,Alarm{s.electionTimeout})
+		if (s.curTerm < ev.term) || (s.curTerm == ev.term && s.lid == -1) {
+			if s.votedFor == 0 || s.votedFor == ev.candidateId || s.curTerm < ev.term {
+				actions = append(actions,Alarm{1,s.electionTimeout})
 				s.resetTerm(ev.term)
 				if s.logTerm < ev.logTerm {
 					s.votedFor = ev.candidateId
@@ -384,7 +418,7 @@ func (s *SM) voteReq(e interface{}) []interface{} {
 		if s.curTerm <= ev.term {
 			s.resetTerm(ev.term)
 			s.votedFor = ev.candidateId
-			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, Alarm{1,s.electionTimeout})
 			actions = append(actions, Send{ev.candidateId, VoteRespEv{s.id,ev.term,true}})
 			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		} else {
@@ -394,12 +428,12 @@ func (s *SM) voteReq(e interface{}) []interface{} {
 		if s.curTerm < ev.term {
 			s.resetTerm(ev.term)
 			s.votedFor = ev.candidateId
-			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, Alarm{1,s.electionTimeout})
 			actions = append(actions, Send{ev.candidateId, VoteRespEv{s.id,ev.term,true}})
 			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		} else {
 			actions = s.broadCast(0,[]byte(""),actions)
-			actions = append(actions, Alarm{s.heartbeatTimeout})
+			actions = append(actions, Alarm{0,s.heartbeatTimeout})
 		}
 
 	}
@@ -418,7 +452,7 @@ func (s *SM) voteResp(e interface{}) []interface{} {
 	case CANDIDATE:
 		if s.curTerm < ev.term {
 			s.resetTerm(ev.term)
-			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, Alarm{1,s.electionTimeout})
 			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		} else {
 			if ev.vote == true && ev.term == s.curTerm {
@@ -428,7 +462,7 @@ func (s *SM) voteResp(e interface{}) []interface{} {
 			if votes >= (len(s.peers)/2)+1 {
 				s.status = LEADER
 				s.lid = s.id
-				actions = append(actions, Alarm{s.heartbeatTimeout})
+				actions = append(actions, Alarm{0,s.heartbeatTimeout})
 				s.resetMajority()
 				s.resetNextIndex()
 				actions = s.broadCast(0,[]byte(""),actions)
@@ -437,7 +471,7 @@ func (s *SM) voteResp(e interface{}) []interface{} {
 	case LEADER:
 		if s.curTerm < ev.term {
 			s.resetTerm(ev.term)
-			actions = append(actions, Alarm{s.electionTimeout})
+			actions = append(actions, Alarm{1,s.electionTimeout})
 			actions = append(actions, SaveState{s.curTerm,s.votedFor,s.commitIndex})
 		}
 
@@ -453,18 +487,20 @@ func (s *SM) timeout() []interface{} {
 		s.status = CANDIDATE
 		s.resetMajority()
 		s.votedFor = s.id
+		s.majority[s.id-1] = 1
+		s.lid = -1
 		actions = s.broadCast(2,[]byte(""),actions)
-		actions = append(actions, Alarm{s.electionTimeout})
+		actions = append(actions, Alarm{1,s.electionTimeout})
 	case CANDIDATE:
 		s.votedFor = s.id
 		s.resetMajority()
 		s.majority[s.id-1] = 1
 		actions = s.broadCast(2,[]byte(""),actions)
-		actions = append(actions, Alarm{s.electionTimeout})
+		actions = append(actions, Alarm{1,s.electionTimeout})
 		actions = append(actions, SaveState{s.curTerm, s.votedFor, s.commitIndex})
 	case LEADER:
 		actions = s.broadCast(0,[]byte(""),actions)
-		actions = append(actions, Alarm{s.heartbeatTimeout})
+		actions = append(actions, Alarm{1,s.heartbeatTimeout})
 	}
 	return actions
 }
