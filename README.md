@@ -1,13 +1,90 @@
-FILE SERVER
+#Distributed File System using RAFT
 
-This implementation of the file server has the following properties :-
+Given is a simple implementation of a distributed file system which makes use of the RAFT consensus protocol in order to distribute the file system across a cluster of servers (5 in this case) and ensure that each of the servers agrees on the series of actions to be performed locally in their state machines.
+It is comprised of the following parts
 
-1. The write operation creates a new file with the given name, and sets the expiry time to the default value 0 (i.e. the file will never expire) if that field is not specified. It reads as many bytes of contents as specified in the write command. If lesser input is given, the file server will wait till the required number of bytes are provided. If the file does not already exist, a map entry is created for the file and its version is set to 1, otherwise the contents of the file are updated and its version is incremented by 1.
+## fs - A simple network file server
 
-2. The read operation first checks whether a file with the given name exists or not. If it does, the file server returns the required details about the file along with its contents, else it simply returns an error saying that the file does not exist.
+**fs** is a simple network file server. Access to the server is via a
+simple telnet compatible API. Each file has a version number, and the server keeps the latest version. There are four commands, to read, write, compare-and-swap and delete the file.
 
-3. The cas operation first checks whether a file with the given name exists or not. It sets the expiry time to the default value 0 (i.e. the file will never expire) if that field is not specified. If the version number specified in this command is same as the current version of the given filename, the contents of the file are swapped with the newly specified contents, and the map entry of the file is also updated appropriately, else an error is returned.
+**fs** files have an optional expiry time attached to them. In combination with the `cas` command, this facility can be used as a coordination service, much like Zookeeper.
 
-4. The delete operation first checks whether a file with the given name exists or not. If it does, the file and its corresponding map entry is deleted, else n error is returned saying that the file does not exist.
+### Sample Usage
 
-This file server implements concurrency, expiry and read write locks to ensure consistency.
+```
+> go run server.go & 
+
+> telnet localhost 8080
+  Connected to localhost.
+  Escape character is '^]'
+  read foo
+  ERR_FILE_NOT_FOUND
+  write foo 6
+  abcdef
+  OK 1
+  read foo
+  CONTENTS 1 6 0
+  abcdef
+  cas foo 1 7 0
+  ghijklm
+  OK 2
+  read foo
+  CONTENTS 2 7 0
+  ghijklm
+```
+
+### Command Specification
+
+The format for each of the four commands is shown below,  
+
+| Command  | Success Response | Error Response
+|----------|-----|----------|
+|read _filename_ \r\n| CONTENTS _version_ _numbytes_ _exptime remaining_\r\n</br>_content bytes_\r\n </br>| ERR_FILE_NOT_FOUND
+|write _filename_ _numbytes_ [_exptime_]\r\n</br>_content bytes_\r\n| OK _version_\r\n| |
+|cas _filename_ _version_ _numbytes_ [_exptime_]\r\n</br>_content bytes_\r\n| OK _version_\r\n | ERR\_VERSION _newversion_
+|delete _filename_ \r\n| OK\r\n | ERR_FILE_NOT_FOUND
+
+In addition the to the semantic error responses in the table above, all commands can get two additional errors. `ERR_CMD_ERR` is returned on a malformed command, `ERR_INTERNAL` on, well, internal errors. There is an additional error `ER_REDIRECT <url>` that the client receives in case it is sending the commands to the node which is not the leader.
+
+For `write` and `cas` and in the response to the `read` command, the content bytes is on a separate line. The length is given by _numbytes_ in the first line.
+
+Files can have an optional expiry time, _exptime_, expressed in seconds. A subsequent `cas` or `write` cancels an earlier expiry time, and imposes the new time. By default, _exptime_ is 0, which represents no expiry. 
+
+
+## raft - A consensus protocol
+
+**raft** is the layer which is responsible for command replication over each of the file servers in the cluster, and to ensure their consistency. It ensures that the command is handed over to the state machine of a given file server instance of the cluster, only if it has been successfully replicated over a majority of the servers in the cluster.
+
+This coordination is achieved by the leader node, which is one of the nodes in the cluster, which has been voted for by a majority in the cluster.
+
+### Input Events
+
+The format for each of the input events for the raft state machine is shown below,  
+
+| Event  | Success Response | Error Response
+|----------|-----|----------|
+|Append (_data_) | Commit (_node id_, _index_, _term_, _data_, _nil_) | Commit (_node id_, -1, 0, _data_, _error message_)
+|Timeout () | Alarm (_timeout_) |
+|AppendEntriesRequest (_term_, _logterm_, _leaderId_, _prevLogIndex_, _prevLogTerm_, _data_, _leaderCommit_)| AppendEntriesResponseEvent (_id_, _index_, _term_, _data_, _true_) | AppendEntriesResponseEvent (_id_, _index_, _term_, _data_, _false_)
+|VoteRequestEvent (_candidateId_, _term_, _logIndex_, _logTerm_) | VoteResponseEvent(_id_, _term_, _true_) | VoteRequestEvent(_id_, _term_, _false_)
+
+### Output Actions
+
+The format of the output actions generated by the raft state machine is given below,
+
+| Action  | Description
+|----------|-----|
+|Send (_peerId_, _event_) | Sends the _event_ i.e AppendEntries Request/Response or Vote Resquest/Response to the given _peerId_ 
+|Commit (_index_, _data_, _err_) | Sends _index_+_data_ if commit is successful, else sends _data_+_err_ to report an error
+|Alarm (_time_) | Sends a Timeout _event_ after _time_ milliseconds
+|LogStore (_index_, _term_, _data_) | Indication to append _data_ to the log at the given _index_
+|SaveState (_curTerm_, _votedFor_, _commitIndex_) | Stores the given data i.e. _curTerm_, _votedFor_, _commitIndex_ to persistent storage for recovery
+
+
+## Install
+
+```
+go get github.com/SrishT/assignment4
+go test github.com/SrishT/assignment4/...
+```
